@@ -1,0 +1,243 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use Illuminate\Http\Request;
+use App\Models\Client;
+use App\Models\CareRecord;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Http;
+use Carbon\Carbon;
+
+class CareController extends Controller
+{
+    public function search(Request $request)
+    {
+        $query = $request->query('query');
+        $client = Client::where('client_name', 'LIKE', "%{$query}%")
+            ->orWhere('id', $query)
+            ->first();
+
+        if ($client) {
+            return response()->json(['status' => 'success', 'client' => $client]);
+        }
+        return response()->json(['status' => 'error', 'message' => '利用者が存在しません'], 404);
+    }
+
+    /**
+     * 全記録取得（検索機能付き）
+     */
+    public function getAllRecords(Request $request)
+    {
+        try {
+            $query = CareRecord::with('client')->orderBy('recorded_at', 'desc');
+
+            // 1. 期間検索 (開始日)
+            if ($request->filled('start')) {
+                $query->whereDate('recorded_at', '>=', $request->start);
+            }
+
+            // 2. 期間検索 (終了日)
+            if ($request->filled('end')) {
+                $query->whereDate('recorded_at', '<=', $request->end);
+            }
+
+            // 3. キーワード検索 (利用者名 or 内容 or 記録者)
+            if ($request->filled('keyword')) {
+                $keyword = $request->keyword;
+                $query->where(function($q) use ($keyword) {
+                    // 利用者名で検索
+                    $q->whereHas('client', function($q2) use ($keyword) {
+                        $q2->where('client_name', 'LIKE', "%{$keyword}%");
+                    })
+                    // 内容で検索
+                    ->orWhere('content', 'LIKE', "%{$keyword}%")
+                    // 記録者で検索
+                    ->orWhere('recorded_by', 'LIKE', "%{$keyword}%");
+                });
+            }
+
+            // 件数制限
+            return $query->take(100)->get();
+
+        } catch (\Exception $e) {
+            Log::error('全記録取得エラー: ' . $e->getMessage());
+            return response()->json(['error' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * ★追加: 直近3件の記録を取得 (チャットクイックアクション用)
+     */
+    public function getRecentRecords($clientId)
+    {
+        $records = CareRecord::where('client_id', $clientId)
+            ->orderBy('recorded_at', 'desc')
+            ->limit(3)
+            ->get();
+        
+        // 日付フォーマット調整（フロントエンド表示用）
+        foreach ($records as $r) {
+            $r->formatted_date = Carbon::parse($r->recorded_at)->format('Y/m/d H:i');
+        }
+
+        return response()->json($records);
+    }
+
+    /**
+     * ★追加: 過去1週間のバイタルデータ取得 (チャットグラフ用)
+     */
+    public function getVitalData($clientId)
+    {
+        $records = CareRecord::where('client_id', $clientId)
+            ->where('recorded_at', '>=', Carbon::now()->subDays(7))
+            ->orderBy('recorded_at', 'asc')
+            ->get();
+
+        // Chart.js 用にデータを整形
+        return response()->json([
+            'dates' => $records->map(function($r) {
+                return Carbon::parse($r->recorded_at)->format('m/d');
+            }),
+            'temps' => $records->pluck('body_temp'),
+            'highs' => $records->pluck('blood_pressure_high'),
+            'lows'  => $records->pluck('blood_pressure_low'),
+        ]);
+    }
+
+    public function storeRecord(Request $request)
+    {
+        $request->validate([
+            'client_id'   => 'required',
+            'recorded_at' => 'required',
+            'content'     => 'required',
+        ]);
+
+        try {
+            $record = new CareRecord();
+            $record->client_id           = $request->client_id;
+            $record->schedule_id         = $request->schedule_id;
+            $record->recorded_at         = $request->recorded_at;
+            $record->recorded_by         = Auth::user()->name; 
+            $record->content             = $request->content;
+            $record->body_temp           = $request->body_temp;
+            $record->blood_pressure_high = $request->blood_pressure_high;
+            $record->blood_pressure_low  = $request->blood_pressure_low;
+            $record->water_intake        = $request->water_intake;
+            $record->spo2                = $request->spo2;
+
+            $record->save();
+
+            return response()->json(['status' => 'success']);
+        } catch (\Exception $e) {
+            return response()->json(['status' => 'error', 'message' => '保存エラー', 'details' => $e->getMessage()], 500);
+        }
+    }
+
+    public function update(Request $request, $id)
+    {
+        try {
+            $record = CareRecord::findOrFail($id);
+            $record->client_id           = $request->client_id;
+            if($request->recorded_at) {
+                $record->recorded_at = $request->recorded_at;
+            }
+            $record->recorded_by         = Auth::user()->name;
+            $record->content             = $request->content;
+            $record->body_temp           = $request->body_temp;
+            $record->blood_pressure_high = $request->blood_pressure_high;
+            $record->blood_pressure_low  = $request->blood_pressure_low;
+            $record->water_intake        = $request->water_intake;
+            $record->spo2                = $request->spo2;
+            $record->save();
+
+            return response()->json(['status' => 'success', 'message' => '更新完了']);
+        } catch (\Exception $e) {
+            return response()->json(['status' => 'error', 'message' => '更新エラー'], 500);
+        }
+    }
+
+    public function destroy($id)
+    {
+        try {
+            $record = CareRecord::find($id);
+            if (!$record) {
+                return response()->json(['status' => 'error', 'message' => '記録が見つかりません'], 404);
+            }
+            $record->delete();
+            return response()->json(['status' => 'success', 'message' => '記録を削除しました']);
+        } catch (\Exception $e) {
+            return response()->json(['status' => 'error', 'message' => '削除エラー'], 500);
+        }
+    }
+
+    public function askAI(Request $request)
+    {
+        try {
+            $clientId = $request->input('clientId');
+            $userQuestion = $request->input('question');
+            $systemPrompt = $request->input('systemPrompt');
+
+            $context = "";
+            $vitalData = [];
+
+            if (!empty($clientId)) {
+                $startDate = $request->input('startDate');
+                $endDate = $request->input('endDate');
+
+                $query = CareRecord::where('client_id', $clientId);
+                if ($startDate) $query->where('recorded_at', '>=', $startDate . ' 00:00:00');
+                if ($endDate) $query->where('recorded_at', '<=', $endDate . ' 23:59:59');
+                
+                $records = $query->orderBy('recorded_at', 'asc')->get();
+
+                $context = "以下は対象利用者のケア記録データです：\n";
+                foreach ($records as $r) {
+                    $context .= "- 日時:{$r->recorded_at}: {$r->content} (体温:{$r->body_temp}℃, 血圧:{$r->blood_pressure_high}/{$r->blood_pressure_low}, SPO2:{$r->spo2}%)\n";
+                    
+                    if ($r->body_temp) {
+                        $vitalData[] = [
+                            'date' => date('Y-m-d', strtotime($r->recorded_at)),
+                            'temp' => (float)$r->body_temp,
+                            'bp_high' => (int)$r->blood_pressure_high,
+                            'bp_low' => (int)$r->blood_pressure_low,
+                            'spo2' => (int)$r->spo2
+                        ];
+                    }
+                }
+            } else {
+                $context = "【重要】特定の利用者は選択されていません。一般的な介護知識に基づいて回答してください。";
+            }
+
+            $apiKey = config('services.gemini.key') ?: env('GEMINI_API_KEY');
+            
+            // ★維持: gemini-2.5-flash モデルを使用
+            $response = Http::withHeaders(['Content-Type' => 'application/json'])
+                ->post("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={$apiKey}", [
+                    'contents' => [
+                        [
+                            'role' => 'user',
+                            'parts' => [['text' => "{$systemPrompt}\n\n{$context}\n\n質問: {$userQuestion}"]]
+                        ]
+                    ]
+                ]);
+
+            $result = $response->json();
+            
+            if (isset($result['error'])) {
+                return response()->json(['answer' => 'AIエラー: ' . ($result['error']['message'] ?? '不明なエラー')], 200);
+            }
+
+            $answer = $result['candidates'][0]['content']['parts'][0]['text'] ?? '回答を取得できませんでした。';
+
+            return response()->json([
+                'answer' => $answer,
+                'vitalData' => $vitalData
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json(['error' => 'サーバーエラー'], 500);
+        }
+    }
+}
