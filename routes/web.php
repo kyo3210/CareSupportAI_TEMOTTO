@@ -153,16 +153,15 @@ Route::middleware(['auth'])->prefix('web-api')->group(function () {
         return response()->json($unfinished);
     });
 
-    // ★修正: 操作ガイド専用API (PDF索引JSONを返すように変更)
+    // ★修正: ファイルの存在確認を確実に行い、ない場合は FILE_NOT_FOUND を返す
     Route::get('/manual-guide', function () {
-        if (Storage::exists('manual_index.json')) {
+        $path = storage_path('app/manual_index.json');
+        if (file_exists($path)) {
             return response()->json([
-                // JSONファイルの中身をそのまま文字列として返す
-                'content' => Storage::get('manual_index.json')
+                'content' => file_get_contents($path)
             ]);
         }
-        // ファイルがない場合は空配列を返す
-        return response()->json(['content' => '[]']);
+        return response()->json(['content' => 'FILE_NOT_FOUND']);
     });
 });
 

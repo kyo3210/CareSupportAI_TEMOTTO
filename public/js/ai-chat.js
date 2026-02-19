@@ -1,8 +1,9 @@
 /**
  * ai-chat.js - AI音声入力＆ケア記録・スケジュール連携システム
- * 【Gold Master v4.8】
- * - 追加: 「操作質問」モードでのPDFマニュアル索引(manual_index.json)連携
- * - 維持: 過去記録の表示最適化、バイタル分析、スケジュール連携等の全機能
+ * 【Gold Master v5.0】
+ * - 修正: 操作質問で要約表示、複数提案、コンパクトな縦レイアウトに対応
+ * - 修正: 該当なしの場合にFAQサイトへのリンクを案内
+ * - 維持: 過去記録、バイタル分析、スケジュール連携等の全機能
  */
 
 // =======================================================
@@ -21,7 +22,7 @@ if (initialToken) {
 let isAwaitingConfirmation = false;
 let clientMap = {}; 
 let isRestoring = false; 
-let cachedManualGuide = ""; // ★追加: マニュアル索引データを保持する変数
+let cachedManualGuide = ""; // マニュアル索引データを保持する変数
 
 // =======================================================
 // 2. 個人情報秘匿化ロジック (維持)
@@ -65,12 +66,20 @@ function unmaskRealNames(text) {
 function appendMessage(sender, message) {
     const chatWindow = $('#chat-window');
     const messageClass = sender === 'user' ? 'user-message' : 'ai-message';
-    const formattedMessage = message.replace(/\n/g, '<br>');
+    
+    // HTMLタグが含まれている場合は改行置換を調整（表示崩れ防止）
+    let formattedMessage = message;
+    if (!message.includes('<div')) {
+        formattedMessage = message.replace(/\n/g, '<br>');
+    } else {
+        // AIのテキスト部分だけの改行をbrにするなどの微調整
+        formattedMessage = message.replace(/\n/g, '<br>').replace(/<br>\s*<div/g, '<div').replace(/<\/div>\s*<br>/g, '</div>');
+    }
 
     let html = '';
     if (sender === 'ai') {
         html = `<div class="${messageClass}" style="display: flex; align-items: flex-start; gap: 10px; margin-bottom: 15px;"> 
-                <div style="background: #eef4ff; padding: 12px; border-radius: 12px; color: #0056b3; line-height: 1.6; border: 1px solid #d1e3f8; max-width: 95%;">
+                <div style="background: #eef4ff; padding: 12px; border-radius: 12px; color: #0056b3; line-height: 1.5; border: 1px solid #d1e3f8; max-width: 95%;">
                     ${formattedMessage}
                 </div>
             </div>`;
@@ -276,6 +285,7 @@ async function renderVitalChart(clientId) {
 // 5. アクション実行エンジン
 // =======================================================
 async function executeChatAction(actionStr) {
+    // 画面遷移を伴うアクションのみここで処理する (open_pdfは除外)
     const rawContent = actionStr.replace('[[ACTION:', '').replace(']]', '');
     const sepIdx = rawContent.indexOf(','); if (sepIdx === -1) return;
     const command = rawContent.substring(0, sepIdx).trim();
@@ -286,22 +296,7 @@ async function executeChatAction(actionStr) {
         case 'analyze': await handleAnalyzeAction(args); break;
         case 'schedule': await handleScheduleAction(args); break;
         case 'client_new': await handleClientNewAction(args); break;
-        
-        // ★追加: PDFマニュアルを表示するアクション
-        case 'open_pdf':
-            const pdfFileName = args[0];
-            const pdfUrl = `/manuals/${pdfFileName}`; // public/manuals/に配置
-            const linkHtml = `
-                <div style="margin-top:8px; padding:10px; background:#fff; border:1px dashed #007bff; border-radius:8px; display:inline-block;">
-                    <div style="color:#007bff; font-weight:bold; font-size:0.9em; margin-bottom:5px;">📄 関連マニュアル</div>
-                    <a href="${pdfUrl}" target="_blank" style="display:inline-flex; align-items:center; gap:5px; background:#007bff; color:#fff; text-decoration:none; padding:6px 12px; border-radius:4px; font-size:0.85em; font-weight:bold;">
-                        <span>PDFを開く</span>
-                    </a>
-                </div>`;
-            appendMessage('ai', linkHtml);
-            break;
-
-        default: appendMessage('ai', '完了しました。');
+        default: console.log('Unknown action handled via text replace');
     }
 }
 
@@ -345,30 +340,39 @@ async function handleClientNewAction(args) {
 }
 
 // =======================================================
-// 6. システムプロンプト設定 (Gemini 2.5-Flash用)
+// 6. システムプロンプト設定 (★複数提案・要約・FAQリンク対応)
 // =======================================================
 function getSystemPrompt(mode) {
     const nursingPersona = "あなたは介護現場の主任です。丁寧な『です・ます』調で回答してください。";
+    
+    // 読み込み失敗時のプロンプト
+    let manualInstruction = "";
+    if (!cachedManualGuide || cachedManualGuide === "FILE_NOT_FOUND") {
+        manualInstruction = "【絶対ルール】マニュアル索引データが読み込めていません。ユーザーには必ず「該当するマニュアルが見つかりませんでした。<br><a href=\"https://emsystems.co.jp/faq/\" target=\"_blank\" style=\"color:#0056b3; font-weight:bold; text-decoration:underline;\">FAQサイト</a>をご確認ください。」と回答してください。絶対に推測で回答しないでください。";
+    } else {
+        manualInstruction = [
+            "あなたはシステムの操作方法を案内する担当です。",
+            "以下の【PDF索引リスト】(JSON形式)を参照し、ユーザーの質問に関連するマニュアルを提案してください。",
+            "",
+            "【重要ルール】",
+            "1. 質問に該当するマニュアルが見つかった場合：",
+            "   ・関連するものを最大3つまで選び、それぞれの手順の【要約】を簡潔に（箇条書きなどで）記載してください。",
+            "   ・スマホで見やすいように余白や前置きは最小限にしてください。",
+            "   ・要約の直後に必ず [[ACTION:open_pdf,ファイル名,タイトル]] を出力してください。（ファイル名はJSONの 'file_name'、タイトルは 'title' をそのまま使用）",
+            "2. 該当するマニュアルが【見つからなかった】場合：",
+            "   ・絶対に推測で回答しないでください。",
+            "   ・「該当するマニュアルが見つかりませんでした。<br><a href=\"https://emsystems.co.jp/faq/\" target=\"_blank\" style=\"color:#0056b3; font-weight:bold; text-decoration:underline;\">FAQサイト</a>をご確認ください。」と回答してください。",
+            "",
+            "【PDF索引リスト】",
+            cachedManualGuide
+        ].join('\n');
+    }
+
     const prompts = {
         analyze: ["あなたは有能なAIアシスタントです。","挨拶不要、即答してください。"].join('\n'),
         record: [nursingPersona, "【役割】スタッフの報告を『介護記録』に整えます。","【出力】[[ACTION:record,仮名,体温;血圧;水分,整えた文章]]"].join('\n'),
         schedule: [nursingPersona, "【役割】スケジュール入力を受け付けます。","【出力】[[ACTION:schedule,仮名,YYYY-MM-DD,HH:MM,タイトル]]"].join('\n'),
-        
-        // ★修正: manual_index.json の内容をプロンプトに組み込む
-        manual: [
-            nursingPersona, 
-            "あなたはシステムの操作方法を案内する担当です。",
-            "以下の【PDF索引リスト】(JSON形式)を参照し、ユーザーの質問に最も関連するマニュアルを提案してください。",
-            "",
-            "【重要ルール】",
-            "1. JSONの 'title' や 'keywords' から最適な項目を1つ選んでください。",
-            "2. 回答の最後に必ず [[ACTION:open_pdf,ファイル名]] を出力してください。（ファイル名はJSON内の 'file_name' を正確に使用すること）",
-            "3. 該当する項目がない場合は「管理者へ確認してください」と答え、アクションは出力しないでください。",
-            "",
-            "【PDF索引リスト】",
-            cachedManualGuide || "（現在ガイドを取得中です。少々お待ちください）" 
-        ].join('\n'),
-
+        manual: [nursingPersona, manualInstruction].join('\n'),
         client_new: [nursingPersona, "新規登録を行います。","【出力】[[ACTION:client_new,氏名,カナ,性別,年齢]]"].join('\n')
     };
     return prompts[mode] || prompts['analyze'];
@@ -379,6 +383,7 @@ function getSystemPrompt(mode) {
 // =======================================================
 function speakText(text, onEndCallback = null) {
     if (!$('#voice-read-toggle').prop('checked')) { if (onEndCallback) onEndCallback(); return; }
+    // HTMLタグやアクションコードを読み飛ばす
     let cleanText = text.replace(/<[^>]*>/g, '').replace(/\[\[.*?\]\]/g, '').replace(/[＊\*・■□▲△▼▽：｜｜]/g, ' ');
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(cleanText);
@@ -423,7 +428,6 @@ function handleVoiceConfirmation(transcript) {
     }
     if ($('#record-add-form').is(':visible')) {
         const temp = extractValue(transcript, '体温'); const bph = extractValue(transcript, '血圧', 0);
-        const bpl = extractValue(transcript, '血圧', 1); const water = extractValue(transcript, '水分');
         let updateMsg = "";
         if (temp) { $('#record-temp').val(temp); updateMsg += `体温を${temp}度に。`; }
         if (bph) { $('#record-bp-high').val(bph); updateMsg += `血圧上を${bph}に。`; }
@@ -472,16 +476,21 @@ $(document).ready(function() {
     updateClientMap(); monitorNetworkRequests();
     $('#mode-analyze').prop('checked', true);
     const $input = $('#user-input');
-    const placeholders = {
-        analyze: "AIに何でも相談してください", record: "例：田中さんの今日の体温は36.5度でした...",
-        schedule: "例：明日の10時に会議の予定を入れて...", manual: "システム操作を案内します"
-    };
 
-    /**
-     * モード切替時のUI更新
-     * ★修正: 操作質問モード時にAPIから manual_index.json を取得する
-     */
+    // 画面を開いた瞬間にマニュアル索引を裏側で取得
+    axios.get('/web-api/manual-guide')
+        .then(res => { 
+            cachedManualGuide = res.data.content; 
+        })
+        .catch(err => { 
+            cachedManualGuide = "FILE_NOT_FOUND"; 
+        });
+
     function updateModeUI(mode) {
+        const placeholders = {
+            analyze: "AIに何でも相談してください", record: "例：田中さんの今日の体温は36.5度でした...",
+            schedule: "例：明日の10時に会議の予定を入れて...", manual: "システム操作を案内します"
+        };
         $input.attr('placeholder', placeholders[mode] || "");
         const $clientArea = $('#client-select').closest('div');
         if (mode === 'analyze' || mode === 'manual' || mode === 'schedule') $clientArea.slideUp(150);
@@ -495,19 +504,6 @@ $(document).ready(function() {
             $qa.find('.for-record').hide(); $qa.find('.for-schedule').show();
             $qa.css('display', 'flex').hide().fadeIn(250);
         } else { $qa.hide(); $('#vital-chart-container').hide(); }
-
-        // ★追加: ガイド取得ロジック
-        if (mode === 'manual' && !cachedManualGuide) {
-            axios.get('/web-api/manual-guide')
-                .then(res => {
-                    cachedManualGuide = res.data.content;
-                    console.log("Guide loaded."); // デバッグ用
-                })
-                .catch(err => {
-                    console.error(err);
-                    cachedManualGuide = "ガイド情報の取得に失敗しました。";
-                });
-        }
     }
     
     updateModeUI($('input[name="chat-mode"]:checked').val() || 'analyze');
@@ -545,10 +541,32 @@ $(document).ready(function() {
         appendMessage('ai', "確認中..."); saveChatState();
         try {
             const res = await axios.post('/web-api/ask-ai', { clientId: $('#client-select').val(), question: maskRealNames(inputVal), systemPrompt: getSystemPrompt(selectedMode) });
-            $('.ai-message').last().remove(); let answer = unmaskRealNames(res.data.answer);
-            const actionMatch = answer.match(/\[\[ACTION:.*?\]\]/);
-            const displayMsg = answer.replace(/\[\[ACTION:.*?\]\]/g, '');
-            if (actionMatch) { executeChatAction(actionMatch[0]); } else { appendMessage('ai', displayMsg); speakText(displayMsg); }
+            $('.ai-message').last().remove(); 
+            let answer = unmaskRealNames(res.data.answer);
+            
+            // ★修正: open_pdf アクションを複数置換し、スマホ向け縦レイアウトで表示する
+            let displayMsg = answer.replace(/\[\[ACTION:open_pdf,(.*?)(?:,(.*?))?\]\]/g, function(match, fileName, title) {
+                const pdfUrl = `/manuals/${fileName.trim()}`;
+                const displayTitle = title ? title.trim() : '関連マニュアル';
+                // 横スクロールを防止し、押しやすいブロック状のボタンを縦配置するデザイン
+                return `
+                <div style="margin: 8px 0; padding: 10px; background: #fff; border: 1px solid #0056b3; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+                    <div style="font-size: 0.9em; font-weight: bold; color: #333; margin-bottom: 8px; line-height: 1.3;">📄 ${displayTitle}</div>
+                    <a href="${pdfUrl}" target="_blank" style="display: block; text-align: center; padding: 8px 0; background: #0056b3; color: #fff; text-decoration: none; border-radius: 4px; font-size: 0.9em; font-weight: bold;">マニュアルを開く</a>
+                </div>`;
+            });
+
+            // 画面遷移系のアクション（record, schedule等）がある場合は抽出して実行
+            const actionMatch = displayMsg.match(/\[\[ACTION:(record|schedule|client_new).*?\]\]/);
+            if (actionMatch) { 
+                executeChatAction(actionMatch[0]); 
+                // 画面遷移アクション自体は文字として表示しない
+                displayMsg = displayMsg.replace(/\[\[ACTION:.*?\]\]/g, '');
+            } 
+            
+            appendMessage('ai', displayMsg); 
+            speakText(displayMsg);
+            
         } catch (err) {
             $('.ai-message').last().remove(); appendMessage('ai', '通信エラーが発生しました。');
         }
