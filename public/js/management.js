@@ -20,7 +20,8 @@ function clearErrors() {
 async function fetchClients() {
     try {
         const response = await axios.get('/web-api/clients');
-        console.log(`利用者リスト取得: ${response.data.length}件`); 
+        // ★修正: 開発用ログを無効化
+        // console.log(`利用者リスト取得: ${response.data.length}件`); 
 
         // ダッシュボードの更新対象者リストを表示
         renderExpiryAlertList(response.data);
@@ -33,7 +34,8 @@ async function fetchClients() {
                 response.data.forEach(c => {
                     $el.append(`<option value="${c.id}">${c.id}: ${c.client_name}</option>`);
                 });
-                console.log(`プルダウン更新完了: ${id}`);
+                // ★修正: 開発用ログを無効化
+                // console.log(`プルダウン更新完了: ${id}`);
             } else {
                 // 警告は出るが、その画面にいないだけなので無視してOK
                 // console.warn(`プルダウンが見つかりません: ${id}`);
@@ -158,7 +160,8 @@ window.goToRecordTab = function(schId, clientId, date, time) {
         $('#record-content').val('');
         $('#record-temp, #record-spo2, #record-bp-high, #record-bp-low, #record-water').val('');
 
-        console.log(`セット完了: ClientID=${clientId}, SchID=${schId}`);
+        // ★修正: 開発用ログを無効化
+        // console.log(`セット完了: ClientID=${clientId}, SchID=${schId}`);
     };
 
     // 処理開始

@@ -12,9 +12,6 @@
         
         /* メインの余白調整 */
         main { padding: 10px; max-width: 1200px; margin: 0 auto; }
-        
-        /* 初期画面設定のバー */
-        .settings-bar { background: #e9ecef; padding: 5px 15px; display: flex; align-items: center; gap: 10px; font-size: 0.8em; }
 
         /* 通知バー用のスタイル */
         .status-bar-container {
@@ -46,26 +43,13 @@
         .alert-list li { padding: 6px 0; border-bottom: 1px solid #f0f0f0; }
         .empty-msg { color: #999; font-size: 0.8em; padding: 5px 0; }
 
-        /* ★追加：プレースホルダー（入力例）の文字色を薄くする設定 */
-        ::placeholder {
-            color: #ccc !important; /* 薄いグレーに変更 */
-            opacity: 1;
-        }
-        /* IE用 */
+        /* プレースホルダーの文字色設定 */
+        ::placeholder { color: #ccc !important; opacity: 1; }
         :-ms-input-placeholder { color: #ccc !important; }
-        /* Edge用 */
         ::-ms-input-placeholder { color: #ccc !important; }
     </style>
 </head>
 <body style="background: #f4f7f6; font-family: 'Helvetica Neue', Arial, sans-serif; margin: 0; padding: 0;">
-
-    <div class="settings-bar">
-        <span>初期画面設定:</span>
-        <select id="start-page-setting" onchange="saveStartPageSetting(this.value)" style="width: auto; padding: 2px;">
-            <option value="dashboard">分析ダッシュボード</option>
-            <option value="schedule">本日のスケジュール</option>
-        </select>
-    </div>
 
     <div id="sidebar-overlay"></div>
     <nav id="sidebar">
@@ -74,7 +58,6 @@
         </div>
         <a class="menu-item active" data-tab="dashboard" onclick="showTab('dashboard')">🏠 ダッシュボード</a>
         <a class="menu-item" data-tab="schedule" onclick="showTab('schedule')">📅 スケジュール管理</a>
-        <a class="menu-item" data-tab="chat" onclick="showTab('chat')">💬 AIチャット相談</a>
         <a class="menu-item" data-tab="vital" onclick="showTab('vital')">📊 バイタル分析</a>
         <a class="menu-item" data-tab="record" onclick="showTab('record')">📝 ケア記録入力</a>
         <a class="menu-item" data-tab="client" onclick="showTab('client')">👤 利用者管理</a>
@@ -100,17 +83,22 @@
             <div style="max-width: 600px; margin: 0 auto;">
                 <div class="status-bar-container">
                     <button type="button" id="btn-vital-alert" class="status-badge danger-badge" onclick="togglePanel('dash-vital-panel')">
-                        <span class="badge-icon">⚠️</span> <span>要注意バイタル</span>
+                        <span class="badge-icon">⚠️</span> <span>バイタル</span>
                         <span class="badge-count" id="count-vital-alert">0</span> <span>▼</span>
                     </button>
                     
                     <button type="button" id="btn-todo-alert" class="status-badge info-badge" onclick="togglePanel('dash-todo-panel')">
-                        <span class="badge-icon">📝</span> <span>未完了・未記録</span>
+                        <span class="badge-icon">📝</span> <span>タスク</span>
                         <span class="badge-count" id="count-todo-alert">0</span> <span>▼</span>
                     </button>
 
+                    <button type="button" id="btn-staff-chat-alert" class="status-badge" style="background-color: #ebf8e8 !important; color: #00b333 !important; border-color: #b3ffc3 !important;" onclick="togglePanel('dash-staff-chat-panel')">
+                        <span class="badge-icon">💬</span> <span>未読</span>
+                        <span class="badge-count" id="count-chat-unread" style="background: #dc3545; display:none;">0</span> <span>▼</span>
+                    </button>
+
                     <button type="button" id="btn-renewal-alert" class="status-badge warning-badge" onclick="togglePanel('dash-renewal-panel')">
-                        <span class="badge-icon">📄</span> <span>認定更新対象</span>
+                        <span class="badge-icon">📄</span> <span>認定更新</span>
                         <span class="badge-count" id="count-renewal-alert">0</span> <span>▼</span>
                     </button>
                 </div>
@@ -133,6 +121,15 @@
                     </div>
                 </div>
 
+                <div id="dash-staff-chat-panel" class="info-panel">
+                    <div class="panel-content" style="border-left: 4px solid #00b333;">
+                        <h6 style="font-weight:bold; margin:0 0 5px;">新着メッセージ</h6>
+                        <ul class="alert-list" id="list-staff-chat-alert">
+                            <li class="empty-msg">現在、未読のメッセージはありません。</li>
+                        </ul>
+                    </div>
+                </div>
+
                 <div id="dash-renewal-panel" class="info-panel">
                     <div class="panel-content warning-border">
                         <h6 style="font-weight:bold; margin:0 0 5px;">認定更新時期が近づいています</h6>
@@ -149,7 +146,6 @@
         </div>
 
         <div id="tab-schedule" class="content-section">@include('parts.schedule')</div>
-        <div id="tab-chat" class="content-section">@include('parts.chat')</div>
         <div id="tab-vital" class="content-section">@include('parts.vital')</div>
         <div id="tab-record" class="content-section">@include('parts.record')</div>
         <div id="tab-client" class="content-section">@include('parts.client')</div>
@@ -167,18 +163,15 @@
         window.toggleSidebar = function() { $('#sidebar, #sidebar-overlay').toggleClass('active'); };
         
         window.showTab = function(tabName) {
-            // セクションの切り替え
             $('.content-section').removeClass('active'); 
             $('#tab-' + tabName).addClass('active');
 
-            // サイドメニューの選択状態の更新
             $('.menu-item').removeClass('active selected');
             $(`.menu-item[data-tab="${tabName}"]`).addClass('active selected');
 
             const titles = { 
                 'dashboard': 'ダッシュボード', 
                 'schedule': 'スケジュール管理', 
-                'chat': 'AIチャット相談', 
                 'vital': 'バイタル分析', 
                 'record': 'ケア記録入力', 
                 'client': '利用者管理', 
@@ -189,7 +182,6 @@
             if($('#sidebar').hasClass('active')) window.toggleSidebar();
             window.scrollTo(0, 0);
 
-            // カレンダー再描画
             if (tabName === 'schedule' && window.calendar) {
                 setTimeout(function() {
                     window.calendar.updateSize(); 

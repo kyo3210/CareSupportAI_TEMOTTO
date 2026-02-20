@@ -1,14 +1,16 @@
 <section id="chat-section">
-    <h2 style="font-size: 1.1em; margin-bottom: 10px;">💬 AIチャット相談</h2>
-
-    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 15px; font-size: 0.85em; background: #f8f9fa; padding: 10px; border-radius: 8px; border: 1px solid #eee;">
-        <span style="font-weight: bold; color: #555;">🔊 AI回答の音声読み上げ</span>
-        <label class="switch" style="cursor: pointer;">
-            <input type="checkbox" id="voice-read-toggle" style="display: none;">
-            <div id="toggle-bg" style="width: 44px; height: 22px; background: #ccc; border-radius: 11px; position: relative; transition: 0.3s;">
-                <div id="toggle-circle" style="width: 18px; height: 18px; background: white; border-radius: 50%; position: absolute; top: 2px; left: 2px; transition: 0.3s; box-shadow: 0 1px 3px rgba(0,0,0,0.2);"></div>
-            </div>
-        </label>
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid #eee; padding-bottom: 8px;">
+        <h2 style="font-size: 1.1em; margin: 0;">💬 AIチャット相談</h2>
+        
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85em;">
+            <span style="font-weight: bold; color: #555;">🔊 音声読上</span>
+            <label class="switch" style="cursor: pointer; margin: 0;">
+                <input type="checkbox" id="voice-read-toggle" style="display: none;">
+                <div id="toggle-bg" style="width: 44px; height: 22px; background: #ccc; border-radius: 11px; position: relative; transition: 0.3s;">
+                    <div id="toggle-circle" style="width: 18px; height: 18px; background: white; border-radius: 50%; position: absolute; top: 2px; left: 2px; transition: 0.3s; box-shadow: 0 1px 3px rgba(0,0,0,0.2);"></div>
+                </div>
+            </label>
+        </div>
     </div>
 
     <div style="margin-bottom: 10px;">
@@ -42,6 +44,11 @@
                 <span class="chip-icon">📋</span> <span class="chip-text">ケア記録</span>
             </label>
 
+            <input type="radio" name="chat-mode" id="mode-staff-chat" value="staff_chat">
+            <label for="mode-staff-chat" class="chip-label staff-chat-theme">
+                <span class="chip-icon">💬</span> <span class="chip-text">メッセージ</span>
+            </label>
+
             <input type="radio" name="chat-mode" id="mode-schedule" value="schedule">
             <label for="mode-schedule" class="chip-label schedule-theme">
                 <span class="chip-icon">📅</span> <span class="chip-text">スケジュール</span>
@@ -55,7 +62,6 @@
     </div>
 
     <div id="chat-quick-actions" class="suggestion-bar" style="display: none;">
-        
         <button type="button" class="bubble-btn for-record" onclick="triggerQuickAction('input')">
             ✏️ 記録を入力する
         </button>
@@ -75,12 +81,14 @@
         <button type="button" class="bubble-btn for-schedule" onclick="triggerQuickAction('schedule_input')" style="display: none;">
             ✏️ 予定を入力する
         </button>
-
     </div>
     
     <form id="chat-form" style="display: flex; gap: 8px; align-items: flex-end; position: relative; z-index: 10;">
-        <button type="button" id="voice-input-btn" style="background: #007bff; color: white; border: none; padding: 0 12px; border-radius: 10px; cursor: pointer; min-width: 48px; height: 48px; font-size: 1.2rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">🎤</button>
+        <button type="button" id="voice-input-btn" style="background: #007bffc6; color: white; border: none; padding: 0 12px; border-radius: 10px; cursor: pointer; min-width: 48px; height: 48px; font-size: 1.2rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">🎤</button>
         
+        <button type="button" id="chat-attach-btn" style="display: none; background: #5aaafbb3; color: white; border: none; padding: 0 12px; border-radius: 10px; cursor: pointer; min-width: 48px; height: 48px; font-size: 1.2rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1);" title="画像を添付">📷</button>
+        <input type="file" id="chat-image-input" accept="image/*" style="display: none;">
+
         <textarea id="user-input" placeholder="AIに何でも相談してください" required rows="1" style="
             flex-grow: 1; 
             padding: 12px 14px; 
@@ -124,6 +132,7 @@
     
     .chip-container input:checked + .analyze-theme { background: linear-gradient(135deg, #7950f2, #5f3dc4); }
     .chip-container input:checked + .record-theme { background: linear-gradient(135deg, #228be6, #1864ab); }
+    .chip-container input:checked + .staff-chat-theme { background: linear-gradient(135deg, #20c997, #12b886); }
     .chip-container input:checked + .schedule-theme { background: linear-gradient(135deg, #40c057, #2b8a3e); }
     .chip-container input:checked + .new-theme { background: linear-gradient(135deg, #fd7e14, #d9480f); }
 
@@ -133,24 +142,21 @@
         gap: 12px;
         overflow-x: auto;
         white-space: nowrap;
-        padding: 5px 4px 12px 4px; /* しっぽ用の下余白 */
-        margin-bottom: -4px;      /* 入力欄に近づける */
+        padding: 5px 4px 12px 4px;
+        margin-bottom: -4px;
         scrollbar-width: none;
         -webkit-overflow-scrolling: touch;
         mask-image: linear-gradient(to right, black 90%, transparent 100%);
         -webkit-mask-image: linear-gradient(to right, black 90%, transparent 100%);
     }
-    .suggestion-bar::-webkit-scrollbar {
-        display: none;
-    }
+    .suggestion-bar::-webkit-scrollbar { display: none; }
 
-    /* 吹き出しボタン（バブル）のデザイン */
     .bubble-btn {
         position: relative;
         background: #fff;
         color: #333;
         border: 1px solid #ccc; 
-        border-radius: 8px; /* 角丸四角 */
+        border-radius: 8px;
         padding: 8px 14px;
         font-size: 0.85rem;
         font-weight: bold;
@@ -164,42 +170,9 @@
         margin-bottom: 5px;
     }
 
-    .bubble-btn:hover {
-        background: #f8f9fa;
-        border-color: #999;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
-
-    /* 吹き出しのしっぽ */
-    .bubble-btn::before {
-        content: '';
-        position: absolute;
-        bottom: -6px; 
-        left: 50%;
-        transform: translateX(-50%);
-        border-width: 6px 6px 0;
-        border-style: solid;
-        border-color: #ccc transparent transparent transparent; /* 枠線 */
-        transition: border-color 0.2s;
-    }
-
-    .bubble-btn::after {
-        content: '';
-        position: absolute;
-        bottom: -4px; 
-        left: 50%;
-        transform: translateX(-50%);
-        border-width: 5px 5px 0;
-        border-style: solid;
-        border-color: #fff transparent transparent transparent; /* 背景 */
-        transition: border-color 0.2s;
-    }
-
-    .bubble-btn:hover::before {
-        border-color: #999 transparent transparent transparent;
-    }
-    .bubble-btn:hover::after {
-        border-color: #f8f9fa transparent transparent transparent;
-    }
+    .bubble-btn:hover { background: #f8f9fa; border-color: #999; transform: translateY(-2px); box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+    .bubble-btn::before { content: ''; position: absolute; bottom: -6px; left: 50%; transform: translateX(-50%); border-width: 6px 6px 0; border-style: solid; border-color: #ccc transparent transparent transparent; transition: border-color 0.2s; }
+    .bubble-btn::after { content: ''; position: absolute; bottom: -4px; left: 50%; transform: translateX(-50%); border-width: 5px 5px 0; border-style: solid; border-color: #fff transparent transparent transparent; transition: border-color 0.2s; }
+    .bubble-btn:hover::before { border-color: #999 transparent transparent transparent; }
+    .bubble-btn:hover::after { border-color: #f8f9fa transparent transparent transparent; }
 </style>

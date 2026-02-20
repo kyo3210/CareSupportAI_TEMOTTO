@@ -163,6 +163,13 @@ Route::middleware(['auth'])->prefix('web-api')->group(function () {
         }
         return response()->json(['content' => 'FILE_NOT_FOUND']);
     });
+
+    // ▼ 職員チャット用 APIルート ▼
+    Route::get('/staff-chat/users', [App\Http\Controllers\StaffChatController::class, 'getStaffList']);
+    Route::get('/staff-chat/messages', [App\Http\Controllers\StaffChatController::class, 'getMessages']);
+    Route::post('/staff-chat/send', [App\Http\Controllers\StaffChatController::class, 'sendMessage']);
+    // ★追加: 未読メッセージ数を取得するルート
+    Route::get('/staff-chat/unread-count', [App\Http\Controllers\StaffChatController::class, 'getUnreadCount']);
 });
 
 // プロフィール管理
