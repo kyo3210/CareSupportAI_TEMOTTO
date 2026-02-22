@@ -36,7 +36,9 @@
  * - 修正: AIによる未入力項目の捏造防止をさらに強化し、送信テキストに存在しない数値や文章をフロントエンド側で強制的に除外・クリアする処理を追加
  * - 修正: 血圧の入力値の大小を自動判別し、大きい方を「上」、小さい方を「下」に正しくセットする処理を追加
  * - 修正: 血圧の区切り文字としてハイフン(-)等も許容するように抽出ロジックを強化
- * - ★修正: AI相談時、現在の日付をプロンプトに動的に付与して時制を正しく認識させ、不要な挨拶文を禁止（今回）
+ * - 修正: AI相談時、現在の日付をプロンプトに動的に付与して時制を正しく認識させ、不要な挨拶文を禁止
+ * - ★修正: チャットアラートで「全員宛て」メッセージの表示と遷移（開く）を正しく行えるよう対応（今回）
+ * - ★追加: 「メッセージ」モード時に、ワンクリックで返信できる定型文・リアクションのクイックアクションボタンを追加（今回）
  */
 
 // =======================================================
@@ -100,12 +102,17 @@ async function updateAlertCounts() {
                 if (textPreview.length > 15) textPreview = textPreview.substring(0, 15) + '...';
                 if (msg.image_path) textPreview = '📷 ' + (textPreview ? textPreview : '画像');
                 
+                // ★修正: メッセージが全員宛て（receiver_idがnull）の場合の表示と遷移先IDを分ける
+                const isBroadcast = msg.receiver_id === null;
+                const targetId = isBroadcast ? '' : msg.sender_id;
+                const senderNameDisplay = isBroadcast ? `📢 ${msg.sender.name} (全員宛て)` : `👤 ${msg.sender.name}`;
+                
                 chatHtml += `<li style="padding: 8px 0; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center;">
                     <div style="flex: 1; overflow: hidden;">
-                        <div style="font-weight:bold; color:#0056b3; font-size:0.9em;">👤 ${msg.sender.name}</div>
+                        <div style="font-weight:bold; color:#0056b3; font-size:0.9em;">${senderNameDisplay}</div>
                         <div style="font-size:0.85em; color:#555; margin-top:2px; white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">${textPreview}</div>
                     </div>
-                    <button type="button" onclick="openSpecificStaffChat(${msg.sender_id})" style="background: #28a745; color: #fff; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 0.85em; margin-left: 10px; font-weight: bold; box-shadow: 0 1px 2px rgba(0,0,0,0.1);">開く</button>
+                    <button type="button" onclick="openSpecificStaffChat('${targetId}')" style="background: #28a745; color: #fff; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 0.85em; margin-left: 10px; font-weight: bold; box-shadow: 0 1px 2px rgba(0,0,0,0.1);">開く</button>
                 </li>`;
             });
         }
@@ -266,7 +273,7 @@ window.triggerQuickAction = async function(action) {
             speakText("記録内容を入力、または音声でお話しください。");
             break;
         case 'history':
-            appendMessage('user', '直近３回分の記録を表示します');
+            appendMessage('user', '過去３回分の記録です');
             appendMessage('ai', '読み込んでいます...');
             try {
                 const res = await axios.get(`/web-api/records/recent/${clientId}`);
@@ -503,7 +510,6 @@ function getSystemPrompt(mode) {
         ].join('\n');
     }
     
-    // ★修正: AIに現在の日付を動的に伝え、不要な挨拶を禁止する
     const today = new Date();
     const currentDateStr = `${today.getFullYear()}年${today.getMonth() + 1}月${today.getDate()}日`;
 
@@ -705,6 +711,7 @@ async function loadChatHistory() {
     }
 }
 
+// ★メッセージ送信機能はそのまま再利用し、ボタンからも呼び出せるように公開(windowに紐付けないが、スコープ内なので使用可能)
 async function sendStaffMessage(messageText, imageFile = null) {
     const receiverId = $('#staff-select').val(); 
     
@@ -738,6 +745,8 @@ async function sendStaffMessage(messageText, imageFile = null) {
         console.error("送信エラー詳細:", e.response || e);
     }
 }
+// 定型文ボタン用に関数をグローバルに公開
+window.sendStaffMessage = sendStaffMessage;
 
 
 // =======================================================
@@ -807,13 +816,36 @@ $(document).ready(function() {
         }
 
         const $qa = $('#chat-quick-actions');
+        
+        // ★追加: スタッフチャット用の定型文クイックアクションを生成
+        if ($qa.find('.for-staff_chat').length === 0) {
+            const quickReplies = ['了解です', 'ありがとう💓', '良かったです✨', '対応します', '👍', '🙇‍♀️', '👌', '🙇‍♂️'];
+            let btnsHtml = '<div class="for-staff_chat" style="display:none; gap:6px; overflow-x:auto; padding: 4px 0; width:100%; white-space:nowrap;">';
+            quickReplies.forEach(text => {
+                btnsHtml += `<button type="button" onclick="window.sendStaffMessage('${text}')" style="background:#fff; border:1px solid #0056b3; color:#0056b3; border-radius:15px; padding:4px 12px; font-size:0.85em; cursor:pointer; font-weight:bold; box-shadow:0 1px 2px rgba(0,0,0,0.05); transition:background 0.2s;">${text}</button>`;
+            });
+            btnsHtml += '</div>';
+            $qa.append(btnsHtml);
+            
+            $qa.find('.for-staff_chat button').hover(
+                function() { $(this).css('background', '#e8f4f8'); },
+                function() { $(this).css('background', '#fff'); }
+            );
+        }
+
         if (mode === 'record') {
-            $qa.find('.for-schedule').hide(); $qa.find('.for-record').show();
+            $qa.find('.for-schedule, .for-staff_chat').hide(); $qa.find('.for-record').show();
             $qa.css('display', 'flex').hide().fadeIn(250);
         } else if (mode === 'schedule') {
-            $qa.find('.for-record').hide(); $qa.find('.for-schedule').show();
+            $qa.find('.for-record, .for-staff_chat').hide(); $qa.find('.for-schedule').show();
             $qa.css('display', 'flex').hide().fadeIn(250);
-        } else { $qa.hide(); $('#vital-chart-container').hide(); }
+        } else if (mode === 'staff_chat') {
+            // ★追加: スタッフチャット時に定型文ボタンを表示
+            $qa.find('.for-record, .for-schedule').hide(); $qa.find('.for-staff_chat').css({ 'display': 'flex', 'overflow-x': 'auto', 'width': '100%' });
+            $qa.css('display', 'flex').hide().fadeIn(250);
+        } else { 
+            $qa.hide(); $('#vital-chart-container').hide(); 
+        }
     }
 
     window.updateChatMode = function(mode) {
