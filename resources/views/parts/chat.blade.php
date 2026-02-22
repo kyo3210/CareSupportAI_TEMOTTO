@@ -72,7 +72,7 @@
             🔍 記録を調べる
         </button>
         <button type="button" class="bubble-btn for-record" onclick="triggerQuickAction('vital')">
-            📈 バイタル分析
+            📈 1週間のバイタル
         </button>
 
         <button type="button" class="bubble-btn for-schedule" onclick="triggerQuickAction('schedule_today')" style="display: none;">

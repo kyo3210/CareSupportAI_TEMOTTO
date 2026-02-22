@@ -1,6 +1,6 @@
 /**
  * ai-chat.js - AI音声入力＆ケア記録・スケジュール連携システム
- * 【Gold Master v7.1】
+ * 【Gold Master v8.2】
  * - 修正: 操作質問で要約表示、複数提案、コンパクトな縦レイアウトに対応
  * - 修正: 該当なしの場合にFAQサイトへのリンクを案内
  * - 維持: 過去記録、バイタル分析、スケジュール連携等の全機能
@@ -12,7 +12,31 @@
  * - 修正: 今日の予定表示で、スケジュールタイトルと利用者名が重複している場合はカッコ書きを省略する
  * - 修正: チャットアラートの各行に「開く」ボタンを設置し、特定職員とのチャットに直接遷移できるように変更
  * - 修正: バイタルアラートの異常値テキストを赤文字に戻す
- * - ★修正: チャットアラートの「開く」を押した際、別画面に飛ばずダッシュボード内のチャットを起動するように変更
+ * - 修正: チャットアラートパネル下部の不要な「チャット画面を開く」青ボタンを完全撤去
+ * - 修正: 左メニューのAIチャット削除に伴い、アラートから開く際の画面遷移をダッシュボード専用に最適化
+ * - 修正: クイックアクション「記録を入力する」でメッセージと「ケア記録表示」ボタンを表示
+ * - 修正: AIが体温・血圧(上下)・SPO2・水分量を全て認識し、ケア記録フォームに自動セットする機能を強化
+ * - 修正: 「ケア記録表示」ボタン押下時、選択中の利用者をケア記録画面へ自動で引き継ぐように変更
+ * - 修正: ケア記録入力中のローディングメッセージを「確認中...」から「ケア記録作成中...」に変更
+ * - 修正: ユーザーとAIのメッセージ幅を85%に制限し、LINE風の吹き出しデザイン（左右の余白としっぽ）を適用
+ * - 修正: 既存CSSの干渉（右側の見えない壁）を完全に断ち切るためクラス名を変更し、最強の右寄せルールを適用
+ * - 修正: ケア記録モードで「記録を調べる」実行時に、記録作成ではなく検索としてAIに処理させるフラグ制御を追加
+ * - 修正: 直近のアクションを引き継ぐよう修正。未選択時は入力テキストから提案を行う処理を追加
+ * - 修正: AI相談モードの際は利用者IDを送信せず、一般的なGeminiとして回答するように変更
+ * - 修正: チャット送信時の自動リロードを防止（ネットワーク監視処理からチャットAPIを除外）
+ * - 修正: 未入力データの推測・捏造を防止し、入力がない項目は空にする処理を追加
+ * - 修正: AIの不要な前置き（「主任として〜」等）を排除し、画面遷移とメッセージの表示順序を最適化
+ * - 修正: 手動でケア記録入力画面を開いた場合は保存後も画面を維持し、AI経由時のみチャットへ戻るよう制御
+ * - 修正: 保存してAIチャットへ戻った際、チャットの履歴と状態を完全に復元する処理を追加
+ * - 修正: 記録を調べる際、回答を「です・ます調」にし、該当記録の簡潔なまとめを返すよう指示を付与
+ * - 修正: 記録作成時のメッセージを「ケア記録作成中...〜」に変更し、結果取得後も削除せずそのまま維持するよう変更
+ * - 修正: 未入力（血圧、水分等）の判定をさらに強化（「なし」「特記事項なし」等も除外対象に追加）
+ * - 修正: 記録保存後にAIチャットへ戻った際、完了報告メッセージ「記録の作成を完了しました。」を追加表示
+ * - 修正: AI相談のシステムプロンプトから不要な制限を外し、一般的なGeminiとして自然に回答するよう変更
+ * - 修正: AIによる未入力項目の捏造防止をさらに強化し、送信テキストに存在しない数値や文章をフロントエンド側で強制的に除外・クリアする処理を追加
+ * - 修正: 血圧の入力値の大小を自動判別し、大きい方を「上」、小さい方を「下」に正しくセットする処理を追加
+ * - 修正: 血圧の区切り文字としてハイフン(-)等も許容するように抽出ロジックを強化
+ * - ★修正: AI相談時、現在の日付をプロンプトに動的に付与して時制を正しく認識させ、不要な挨拶文を禁止（今回）
  */
 
 // =======================================================
@@ -32,13 +56,13 @@ let isAwaitingConfirmation = false;
 let clientMap = {}; 
 let isRestoring = false; 
 let cachedManualGuide = ""; 
+let activeQuickAction = null; 
 
 // =======================================================
 // 2. アラート通知の更新（バイタル・チャット未読）
 // =======================================================
 async function updateAlertCounts() {
     try {
-        // ① バイタルアラートの取得と表示更新
         const resVital = await axios.get('/web-api/dashboard/vital-alerts');
         const vitalCount = resVital.data.length;
         $('#count-vital-alert').text(vitalCount);
@@ -55,7 +79,6 @@ async function updateAlertCounts() {
         }
         $('#list-vital-alert').html(vitalHtml);
 
-        // ② チャット未読数の取得と反映
         const resChat = await axios.get('/web-api/staff-chat/unread-count');
         const unreadCount = resChat.data.unread_count;
         const unreadMsgs = resChat.data.messages;
@@ -94,7 +117,7 @@ async function updateAlertCounts() {
 }
 
 // =======================================================
-// 3. 個人情報秘匿化ロジック (維持)
+// 3. 個人情報秘匿化ロジック
 // =======================================================
 function updateClientMap() {
     clientMap = {};
@@ -138,7 +161,7 @@ function appendMessage(sender, message) {
     
     let formattedMessage = message;
     if (typeof message === 'string') {
-        if (!message.includes('<div') && !message.includes('<img')) {
+        if (!message.includes('<div') && !message.includes('<img') && !message.includes('<button')) {
             formattedMessage = message.replace(/\n/g, '<br>');
         } else {
             formattedMessage = message.replace(/\n/g, '<br>').replace(/<br>\s*<div/g, '<div').replace(/<\/div>\s*<br>/g, '</div>');
@@ -146,21 +169,24 @@ function appendMessage(sender, message) {
     }
 
     let html = '';
+    
     if (sender === 'ai') {
-        html = `<div class="${messageClass}" style="display: flex; align-items: flex-start; gap: 10px; margin-bottom: 15px;"> 
-                <div style="background: #eef4ff; padding: 12px; border-radius: 12px; color: #0056b3; line-height: 1.5; border: 1px solid #d1e3f8; max-width: 95%;">
+        html = `<div class="${messageClass}" style="display: flex; flex-direction: column; align-items: flex-start; width: 100%; margin: 0 0 15px 0 !important; padding: 0 !important;"> 
+                <div style="background: #eef4ff; padding: 12px 15px; border-radius: 0 15px 15px 15px; color: #0056b3; line-height: 1.5; border: 1px solid #d1e3f8; max-width: 90%; text-align: left; word-wrap: break-word; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
                     ${formattedMessage}
                 </div>
             </div>`;
     } else if (sender === 'staff') {
-        html = `<div class="${messageClass}" style="display: flex; align-items: flex-start; gap: 10px; margin-bottom: 15px;"> 
-                <div style="background: #e8f4f8; padding: 10px; border-radius: 10px; color: #0056b3; max-width: 85%;">
+        html = `<div class="${messageClass}" style="display: flex; flex-direction: column; align-items: flex-start; width: 100%; margin: 0 0 15px 0 !important; padding: 0 !important;"> 
+                <div style="background: #e8f4f8; padding: 10px 14px; border-radius: 0 15px 15px 15px; color: #0056b3; max-width: 90%; text-align: left; word-wrap: break-word; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
                     ${formattedMessage}
                 </div>
             </div>`;
     } else {
-        html = `<div class="${messageClass}" style="display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-bottom: 10px;">
-                <div style="background: #f0f0f0; padding: 10px; border-radius: 10px; color: #333; max-width: 80%; text-align: right;">${formattedMessage}</div>
+        html = `<div class="user-chat-bubble" style="display: flex; flex-direction: column; align-items: flex-end; width: 100%; margin: 0 0 15px 0 !important; padding: 0 !important;">
+                <div style="background: #f0f0f0; border: 1px solid #ddd; padding: 12px 15px; border-radius: 15px 0 15px 15px; color: #333; max-width: 90%; text-align: left; line-height: 1.5; word-wrap: break-word; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+                    ${formattedMessage}
+                </div>
             </div>`;
     }
     chatWindow.append(html);
@@ -230,13 +256,17 @@ window.triggerQuickAction = async function(action) {
         return;
     }
 
+    activeQuickAction = action; 
+
     switch (action) {
         case 'input':
+            const msgHtml = `記録を入力してください。<div style="margin-top: 8px;"><button type="button" onclick="openRecordTabWithClient()" style="background: #28a745; color: #fff; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.85em; font-weight: bold; box-shadow: 0 1px 2px rgba(0,0,0,0.1);">📝 ケア記録表示</button></div>`;
+            appendMessage('ai', msgHtml);
             $('#user-input').focus();
             speakText("記録内容を入力、または音声でお話しください。");
             break;
         case 'history':
-            appendMessage('user', '過去記録');
+            appendMessage('user', '直近３回分の記録を表示します');
             appendMessage('ai', '読み込んでいます...');
             try {
                 const res = await axios.get(`/web-api/records/recent/${clientId}`);
@@ -269,12 +299,12 @@ window.triggerQuickAction = async function(action) {
             $('#user-input').attr('placeholder', '例：インフルエンザはいつ？').focus();
             break;
         case 'vital':
-            appendMessage('user', 'バイタル分析');
+            appendMessage('user', '１週間分のバイタルを表示します');
             $('#vital-chart-container').slideDown();
             renderVitalChart(clientId); speakText("週間バイタルを表示します。");
             break;
         case 'schedule_today':
-            appendMessage('user', '今日の予定');
+            appendMessage('user', '今日の予定を表示します');
             appendMessage('ai', '確認中...');
             try {
                 const res = await axios.get('/web-api/schedules/today');
@@ -366,21 +396,67 @@ async function executeChatAction(actionStr) {
 }
 
 async function handleRecordAction(args) {
-    const [name, vitals, content] = args; saveChatState(); sessionStorage.setItem('ai_chat_mode', 'active');
+    const [name, vitals, content] = args; 
+    saveChatState(); 
+    sessionStorage.setItem('ai_chat_mode', 'active');
+    
+    const confirmMsg = "ケア記録作成中...この後に表示される記録入力画面で内容を確認後に保存してください";
+    speakText(confirmMsg, () => { if (recognition) recognition.start(); }); 
+    isAwaitingConfirmation = true;
+
+    window.isAiChatAutoClick = true;
+
     if (typeof showTab === 'function') showTab('record');
     else $('a[href="#record"], button[data-tab="record"]').trigger('click');
-    $('#record-temp, #record-bp-high, #record-bp-low, #record-water').val('');
+    
+    setTimeout(() => { window.isAiChatAutoClick = false; }, 500);
+
+    $('#record-temp, #record-bp-high, #record-bp-low, #record-spo2, #record-water').val('');
+    
     $('#record-client-select').val($('#client-select').val()).trigger('change');
     $('#record-date').val(new Date().toISOString().split('T')[0]);
     $('#record-time').val(new Date().toTimeString().slice(0, 5));
-    $('#record-content').val(unmaskRealNames(content));
-    if (vitals && vitals !== "無し") {
-        const temp = extractValue(vitals, '体温'); const bph = extractValue(vitals, '血圧', 0);
-        if (temp) $('#record-temp').val(temp); if (bph) $('#record-bp-high').val(bph);
+    
+    const lastInput = sessionStorage.getItem('ai_chat_last_input') || "";
+    
+    const isNoContent = !content || ['無し', 'なし', '特記事項無し', '特記事項なし', '特になし'].includes(content.trim());
+    let cleanContent = isNoContent ? '' : unmaskRealNames(content);
+    
+    let textWithoutVitals = lastInput.replace(/体温|熱|度|℃|血圧|上|下|spo2|サチュレーション|水分|量|ミリ|ml|cc/gi, '').replace(/[0-9０-９.\/]/g, '').trim();
+    if (textWithoutVitals.length <= 5 && lastInput.length <= 20) {
+        cleanContent = '';
     }
-    const confirmMsg = `記録を整えました。確認して保存してください。`;
-    appendMessage('ai', confirmMsg); saveChatState(); 
-    speakText(confirmMsg, () => { if (recognition) recognition.start(); }); isAwaitingConfirmation = true;
+    
+    $('#record-content').val(cleanContent);
+    
+    if (vitals && vitals !== "無し" && vitals !== "なし") {
+        let temp = extractValue(vitals, '体温'); 
+        let bph = extractValue(vitals, '血圧', 0); 
+        let bpl = extractValue(vitals, '血圧', 1);
+        let spo2 = extractValue(vitals, 'SPO2', 0) || extractValue(vitals, 'SpO2', 0) || extractValue(vitals, 'spo2', 0);
+        let water = extractValue(vitals, '水分');
+
+        if (bph !== null && bpl !== null) {
+            let numH = parseFloat(bph);
+            let numL = parseFloat(bpl);
+            if (numH < numL) {
+                bph = numL.toString();
+                bpl = numH.toString();
+            }
+        }
+
+        if (temp && !lastInput.includes(temp)) temp = null;
+        if (bph && !lastInput.includes(bph)) bph = null;
+        if (bpl && !lastInput.includes(bpl)) bpl = null;
+        if (spo2 && !lastInput.includes(spo2)) spo2 = null;
+        if (water && !lastInput.includes(water)) water = null;
+
+        if (temp) $('#record-temp').val(temp); 
+        if (bph) $('#record-bp-high').val(bph);
+        if (bpl) $('#record-bp-low').val(bpl);
+        if (spo2) $('#record-spo2').val(spo2);
+        if (water && water !== "無し" && water !== "なし") $('#record-water').val(water);
+    }
 }
 
 async function handleAnalyzeAction(args) {
@@ -405,7 +481,7 @@ async function handleClientNewAction(args) {
 }
 
 // =======================================================
-// 7. システムプロンプト設定 (維持)
+// 7. システムプロンプト設定
 // =======================================================
 function getSystemPrompt(mode) {
     const nursingPersona = "あなたは介護現場の主任です。丁寧な『です・ます』調で回答してください。";
@@ -426,9 +502,23 @@ function getSystemPrompt(mode) {
             cachedManualGuide
         ].join('\n');
     }
+    
+    // ★修正: AIに現在の日付を動的に伝え、不要な挨拶を禁止する
+    const today = new Date();
+    const currentDateStr = `${today.getFullYear()}年${today.getMonth() + 1}月${today.getDate()}日`;
+
     const prompts = {
-        analyze: ["あなたは有能なAIアシスタントです。","挨拶不要、即答してください。"].join('\n'),
-        record: [nursingPersona, "【役割】スタッフの報告を『介護記録』に整えます。","【出力】[[ACTION:record,仮名,体温;血圧;水分,整えた文章]]"].join('\n'),
+        analyze: [
+            "あなたは親切で有能なAIアシスタントです。一般的な質問に対して、自然な言葉遣いで丁寧に回答してください。",
+            `現在の日付は ${currentDateStr} です。この日付を基準に時制（過去・現在・未来）を正確に判断して回答してください。`,
+            "※「お問い合わせいただきありがとうございます」などの挨拶や前置きは一切不要です。直接回答から始めてください。"
+        ].join('\n'),
+        record: [
+            "【役割】スタッフの報告を『介護記録』に整えます。",
+            "【出力】[[ACTION:record,仮名,体温:〇;血圧:〇/〇;SPO2:〇;水分:〇,整えた文章]]。",
+            "※必ず上記のアクションタグのみを出力してください。挨拶や前置き（「主任として〜」等）は一切不要です。",
+            "※ユーザーが発言していない項目（数値やケア内容の文章）は絶対に推測や捏造をせず、必ず「無し」としてください。"
+        ].join('\n'),
         schedule: [nursingPersona, "【役割】スケジュール入力を受け付けます。","【出力】[[ACTION:schedule,仮名,YYYY-MM-DD,HH:MM,タイトル]]"].join('\n'),
         manual: [nursingPersona, manualInstruction].join('\n'),
         client_new: [nursingPersona, "新規登録を行います。","【出力】[[ACTION:client_new,氏名,カナ,性別,年齢]]"].join('\n')
@@ -437,7 +527,7 @@ function getSystemPrompt(mode) {
 }
 
 // =======================================================
-// 8. 音声機能 (維持)
+// 8. 音声機能
 // =======================================================
 function speakText(text, onEndCallback = null) {
     if (!$('#voice-read-toggle').prop('checked')) { if (onEndCallback) onEndCallback(); return; }
@@ -484,17 +574,26 @@ function handleVoiceConfirmation(transcript) {
         return;
     }
     if ($('#record-add-form').is(':visible')) {
-        const temp = extractValue(transcript, '体温'); const bph = extractValue(transcript, '血圧', 0);
+        const temp = extractValue(transcript, '体温'); 
+        const bph = extractValue(transcript, '血圧', 0);
+        const bpl = extractValue(transcript, '血圧', 1);
+        const spo2 = extractValue(transcript, 'SPO2', 0) || extractValue(transcript, 'SpO2', 0) || extractValue(transcript, 'spo2', 0);
+        const water = extractValue(transcript, '水分');
+
         let updateMsg = "";
         if (temp) { $('#record-temp').val(temp); updateMsg += `体温を${temp}度に。`; }
         if (bph) { $('#record-bp-high').val(bph); updateMsg += `血圧上を${bph}に。`; }
+        if (bpl) { $('#record-bp-low').val(bpl); updateMsg += `血圧下を${bpl}に。`; }
+        if (spo2) { $('#record-spo2').val(spo2); updateMsg += `SPO2を${spo2}に。`; }
+        if (water) { $('#record-water').val(water); updateMsg += `水分を${water}に。`; }
+
         if (updateMsg) { speakText(updateMsg + "よろしいですか？", () => { if (recognition) recognition.start(); }); }
         else { isAwaitingConfirmation = false; speakText("保留しました。"); }
     }
 }
 
 function extractValue(str, key, index = 0) {
-    const regex = new RegExp(`${key}([:：\\s]*)(\\d+\\.?\\d*)(\\/)?(\\d+)?`);
+    const regex = new RegExp(`${key}([:：\\s]*)(\\d+\\.?\\d*)([\\/\\-ー〜~\\s]+)?(\\d+)?`);
     const match = str.match(regex);
     if (!match) return null;
     return index === 0 ? match[2] : (match[4] || null);
@@ -505,6 +604,9 @@ function forceReturnToChat() {
     speakText("保存しました。");
     sessionStorage.setItem('ai_is_returning_from_save', 'true');
     sessionStorage.removeItem('ai_chat_mode');
+    
+    sessionStorage.setItem('ai_chat_selected_mode', 'record');
+
     setTimeout(() => { 
         const url = new URL(window.location.href); url.searchParams.set('tab', 'chat'); window.location.href = url.toString();
     }, 1200);
@@ -512,9 +614,16 @@ function forceReturnToChat() {
 
 function monitorNetworkRequests() {
     const originalOpen = XMLHttpRequest.prototype.open; const originalSend = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.open = function(m) { this._method = m; return originalOpen.apply(this, arguments); };
+    XMLHttpRequest.prototype.open = function(m, url) { 
+        this._method = m; 
+        this._url = url; 
+        return originalOpen.apply(this, arguments); 
+    };
     XMLHttpRequest.prototype.send = function() {
         this.addEventListener('load', function() {
+            if (this._url && (this._url.includes('/web-api/ask-ai') || this._url.includes('/web-api/staff-chat/'))) {
+                return;
+            }
             if ((this._method === 'POST' || this._method === 'PUT') && this.status >= 200 && this.status < 300) {
                 if (sessionStorage.getItem('ai_chat_mode') === 'active') forceReturnToChat();
             }
@@ -637,6 +746,16 @@ async function sendStaffMessage(messageText, imageFile = null) {
 $(document).ready(function() {
     updateClientMap(); monitorNetworkRequests();
     
+    if (sessionStorage.getItem('ai_is_returning_from_save') === 'true') {
+        sessionStorage.removeItem('ai_is_returning_from_save');
+        setTimeout(() => {
+            restoreChatState(true);
+            setTimeout(() => {
+                appendMessage('ai', '記録の作成を完了しました。');
+            }, 300);
+        }, 100); 
+    }
+
     updateAlertCounts();
     setInterval(updateAlertCounts, 30000);
 
@@ -645,6 +764,8 @@ $(document).ready(function() {
     axios.get('/web-api/manual-guide').then(res => { cachedManualGuide = res.data.content; }).catch(err => { cachedManualGuide = "FILE_NOT_FOUND"; });
     
     function updateModeUI(mode) {
+        activeQuickAction = null;
+        
         const placeholders = {
             analyze: "AIに何でも相談してください", record: "例：田中さんの今日の体温は36.5度でした...",
             schedule: "例：明日の10時に会議の予定を入れて...", manual: "システム操作を案内します",
@@ -721,6 +842,12 @@ $(document).ready(function() {
     $('#client-select').on('change', function() { updateClientMap(); if (!isRestoring) saveChatState(); });
     $('#voice-input-btn').on('click', function() { if (recognition) recognition.start(); });
     
+    $(document).on('click', '[data-tab], a[href^="#"], .menu-item, .nav-link', function() {
+        if (!window.isAiChatAutoClick) {
+            sessionStorage.removeItem('ai_chat_mode');
+        }
+    });
+
     $(document).on('change', '#staff-select', function() {
         loadChatHistory();
     });
@@ -746,6 +873,9 @@ $(document).ready(function() {
 
     $('#chat-form').on('submit', async function(e) {
         e.preventDefault(); const inputVal = $('#user-input').val(); if (!inputVal.trim()) return;
+        
+        sessionStorage.setItem('ai_chat_last_input', inputVal);
+        
         const curToken = getCsrfToken(); if (curToken) axios.defaults.headers.common['X-CSRF-TOKEN'] = curToken;
         const selectedMode = $('input[name="chat-mode"]:checked').val() || 'analyze';
         
@@ -754,11 +884,53 @@ $(document).ready(function() {
             return;
         }
 
+        if (selectedMode === 'record' && !activeQuickAction) {
+            appendMessage('user', inputVal); 
+            $('#user-input').val('').css('height', 'auto');
+            
+            const isQuestion = /いつ|どこ|だれ|誰|何|どう|様子|教え|調べ|確認|過去|履歴|？|\?|インフルエンザ|病状|症状/.test(inputVal);
+            const suggestedBtn = isQuestion ? '「🔍 記録を調べる」' : '「📝 記録を入力する」';
+            
+            const reply = `ご入力ありがとうございます。正確に処理を行うため、まずはチャット画面下部の${suggestedBtn}等のボタンをクリックしてから、再度内容をご送信ください。`;
+            appendMessage('ai', reply);
+            speakText(reply);
+            return;
+        }
+
         appendMessage('user', inputVal); $('#user-input').val('').css('height', 'auto'); 
-        appendMessage('ai', "確認中..."); saveChatState();
+        
+        let loadingMsg = "確認中...";
+        let promptMode = selectedMode;
+        let targetClientId = $('#client-select').val(); 
+        
+        let finalQuestion = maskRealNames(inputVal);
+        
+        if (selectedMode === 'record') {
+            if (activeQuickAction === 'search' || activeQuickAction === 'history' || activeQuickAction === 'vital') {
+                loadingMsg = "記録を確認中...";
+                promptMode = 'analyze'; 
+                finalQuestion += "\n（※回答は丁寧な『です・ます』調で、単語のみでなく該当する記録内容を簡潔にまとめて報告してください。）";
+            } else {
+                loadingMsg = "ケア記録作成中...この後に表示される記録入力画面で内容を確認後に保存してください";
+                promptMode = 'record'; 
+            }
+        } else if (selectedMode === 'analyze') {
+            targetClientId = null;
+        }
+        
+        appendMessage('ai', loadingMsg); saveChatState();
+        
         try {
-            const res = await axios.post('/web-api/ask-ai', { clientId: $('#client-select').val(), question: maskRealNames(inputVal), systemPrompt: getSystemPrompt(selectedMode) });
-            $('.ai-message').last().remove(); 
+            const res = await axios.post('/web-api/ask-ai', { 
+                clientId: targetClientId, 
+                question: finalQuestion, 
+                systemPrompt: getSystemPrompt(promptMode) 
+            });
+            
+            if (promptMode !== 'record') {
+                $('.ai-message').last().remove(); 
+            }
+            
             let answer = unmaskRealNames(res.data.answer);
             
             let displayMsg = answer.replace(/\[\[ACTION:open_pdf,(.*?)(?:,(.*?))?\]\]/g, function(match, fileName, title) {
@@ -777,8 +949,10 @@ $(document).ready(function() {
                 displayMsg = displayMsg.replace(/\[\[ACTION:.*?\]\]/g, '');
             } 
             
-            appendMessage('ai', displayMsg); 
-            speakText(displayMsg);
+            if (promptMode !== 'record' && displayMsg.trim() !== '') {
+                appendMessage('ai', displayMsg); 
+                speakText(displayMsg);
+            }
             
         } catch (err) {
             $('.ai-message').last().remove(); appendMessage('ai', '通信エラーが発生しました。');
@@ -790,16 +964,9 @@ $(document).ready(function() {
 // ★新規追加: アラートパネルから特定の職員とのチャットを開く
 // =======================================================
 window.openSpecificStaffChat = function(staffId) {
-    // 1. パネルを閉じる
     if (typeof togglePanel === 'function') togglePanel('dash-staff-chat-panel');
-    
-    // 2. ★修正: 別の画面に飛ばず、ダッシュボードにとどまる
-    if (typeof showTab === 'function') showTab('dashboard');
-    
-    // 3. 画面下部のAIチャットを「チャット(staff_chat)」モードに切り替え
     if (typeof window.updateChatMode === 'function') window.updateChatMode('staff_chat');
     
-    // 4. 少し待ってから該当の職員をプルダウンで選択して履歴を表示
     setTimeout(() => {
         if (staffId) {
             $('#staff-select').val(staffId).trigger('change');
@@ -807,10 +974,24 @@ window.openSpecificStaffChat = function(staffId) {
             $('#staff-select').val('').trigger('change');
         }
         
-        // ★おもてなし機能: チャットエリアが見えやすいように少しだけ下に自動スクロール
         const chatTop = $('#chat-window').offset()?.top;
         if(chatTop) {
             $('html, body').animate({ scrollTop: chatTop - 100 }, 300);
         }
     }, 200);
+};
+
+// =======================================================
+// ★新規追加: ケア記録タブを開き、選択中の利用者をセットする
+// =======================================================
+window.openRecordTabWithClient = function() {
+    if (typeof showTab === 'function') showTab('record');
+    
+    const selectedClientId = $('#client-select').val();
+    
+    if (selectedClientId) {
+        setTimeout(() => {
+            $('#record-client-select').val(selectedClientId).trigger('change');
+        }, 100);
+    }
 };
