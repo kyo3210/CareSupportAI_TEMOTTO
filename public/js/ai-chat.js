@@ -30,15 +30,20 @@
  * - 修正: 保存してAIチャットへ戻った際、チャットの履歴と状態を完全に復元する処理を追加
  * - 修正: 記録を調べる際、回答を「です・ます調」にし、該当記録の簡潔なまとめを返すよう指示を付与
  * - 修正: 記録作成時のメッセージを「ケア記録作成中...〜」に変更し、結果取得後も削除せずそのまま維持するよう変更
- * - 修正: 未入力（血圧、水分等）の判定をさらに強化（「なし」「特記事項なし」等も除外対象に追加）
+ *  * - 修正: 未入力（血圧、水分等）の判定をさらに強化（「なし」「特記事項なし」等も除外対象に追加）
  * - 修正: 記録保存後にAIチャットへ戻った際、完了報告メッセージ「記録の作成を完了しました。」を追加表示
  * - 修正: AI相談のシステムプロンプトから不要な制限を外し、一般的なGeminiとして自然に回答するよう変更
  * - 修正: AIによる未入力項目の捏造防止をさらに強化し、送信テキストに存在しない数値や文章をフロントエンド側で強制的に除外・クリアする処理を追加
  * - 修正: 血圧の入力値の大小を自動判別し、大きい方を「上」、小さい方を「下」に正しくセットする処理を追加
  * - 修正: 血圧の区切り文字としてハイフン(-)等も許容するように抽出ロジックを強化
  * - 修正: AI相談時、現在の日付をプロンプトに動的に付与して時制を正しく認識させ、不要な挨拶文を禁止
- * - ★修正: チャットアラートで「全員宛て」メッセージの表示と遷移（開く）を正しく行えるよう対応（今回）
- * - ★追加: 「メッセージ」モード時に、ワンクリックで返信できる定型文・リアクションのクイックアクションボタンを追加（今回）
+ * - 修正: チャットアラートで「全員宛て」メッセージの表示と遷移（開く）を正しく行えるよう対応
+ * - 追加: 「メッセージ」モード時に、ワンクリックで返信できる定型文・リアクションのクイックアクションボタンを追加
+ * - ★修正: AI相談時、不要な挨拶を完全禁止し、知識不足の際の時制の言い訳や、ケア記録を探索してしまう挙動を禁止するようプロンプトを強化（今回）
+ * - ★修正: CSSの order プロパティを使用し、HTMLの構造に依存せず「入力欄を一番上」「マイク・画像・絵文字・クリアを左下」「送信を右下」に完全固定するようレイアウトを改善（今回）
+ * - ★修正: CSSの!importantの競合を解消し、ボタンの表示/非表示（マイク常時、画像・絵文字はメッセージのみ等）が正しく機能するように修正（今回）
+ * - ★追加: 「AI相談」「メッセージ」モード時に、ファイル（txt, pdf, mp4等）を添付するためのボタン（📎）を追加（今回）
+ * - ★追加: 送信したメッセージを削除できる機能（🗑️ 削除ボタン）を追加（今回）
  */
 
 // =======================================================
@@ -100,9 +105,8 @@ async function updateAlertCounts() {
             unreadMsgs.forEach(msg => {
                 let textPreview = msg.message ? msg.message : '';
                 if (textPreview.length > 15) textPreview = textPreview.substring(0, 15) + '...';
-                if (msg.image_path) textPreview = '📷 ' + (textPreview ? textPreview : '画像');
+                if (msg.image_path) textPreview = '🖼️ ' + (textPreview ? textPreview : '画像');
                 
-                // ★修正: メッセージが全員宛て（receiver_idがnull）の場合の表示と遷移先IDを分ける
                 const isBroadcast = msg.receiver_id === null;
                 const targetId = isBroadcast ? '' : msg.sender_id;
                 const senderNameDisplay = isBroadcast ? `📢 ${msg.sender.name} (全員宛て)` : `👤 ${msg.sender.name}`;
@@ -168,7 +172,7 @@ function appendMessage(sender, message) {
     
     let formattedMessage = message;
     if (typeof message === 'string') {
-        if (!message.includes('<div') && !message.includes('<img') && !message.includes('<button')) {
+        if (!message.includes('<div') && !message.includes('<img') && !message.includes('<button') && !message.includes('<a')) {
             formattedMessage = message.replace(/\n/g, '<br>');
         } else {
             formattedMessage = message.replace(/\n/g, '<br>').replace(/<br>\s*<div/g, '<div').replace(/<\/div>\s*<br>/g, '</div>');
@@ -419,13 +423,11 @@ async function handleRecordAction(args) {
     setTimeout(() => { window.isAiChatAutoClick = false; }, 500);
 
     $('#record-temp, #record-bp-high, #record-bp-low, #record-spo2, #record-water').val('');
-    
     $('#record-client-select').val($('#client-select').val()).trigger('change');
     $('#record-date').val(new Date().toISOString().split('T')[0]);
     $('#record-time').val(new Date().toTimeString().slice(0, 5));
     
     const lastInput = sessionStorage.getItem('ai_chat_last_input') || "";
-    
     const isNoContent = !content || ['無し', 'なし', '特記事項無し', '特記事項なし', '特になし'].includes(content.trim());
     let cleanContent = isNoContent ? '' : unmaskRealNames(content);
     
@@ -515,9 +517,12 @@ function getSystemPrompt(mode) {
 
     const prompts = {
         analyze: [
-            "あなたは親切で有能なAIアシスタントです。一般的な質問に対して、自然な言葉遣いで丁寧に回答してください。",
-            `現在の日付は ${currentDateStr} です。この日付を基準に時制（過去・現在・未来）を正確に判断して回答してください。`,
-            "※「お問い合わせいただきありがとうございます」などの挨拶や前置きは一切不要です。直接回答から始めてください。"
+            "あなたは親切で有能なAIアシスタントです。一般的な質問に対して、自然な言葉遣いで回答してください。",
+            `【現在の日時】今日は ${currentDateStr} です。この日付を基準に時制を判断してください。`,
+            "【厳守ルール】",
+            "1. 「お問い合わせいただきありがとうございます」「〜についてですね」等の挨拶や前置きは一切禁止です。いきなり回答の結論から書き始めてください。",
+            "2. あなたの学習データ期間以降の出来事について聞かれた場合、「まだ開催されていません」と答えるのは禁止です。事前に決定している予定の情報を元に、現在の時制に合わせて回答してください。",
+            "3. 一般的な質問（オリンピックやニュースなど）に対して、「提供されたケア記録データには含まれていません」と答えるのは禁止です。裏側でケア記録が渡されていても無視し、あなた自身の一般知識で回答してください。"
         ].join('\n'),
         record: [
             "【役割】スタッフの報告を『介護記録』に整えます。",
@@ -610,9 +615,7 @@ function forceReturnToChat() {
     speakText("保存しました。");
     sessionStorage.setItem('ai_is_returning_from_save', 'true');
     sessionStorage.removeItem('ai_chat_mode');
-    
     sessionStorage.setItem('ai_chat_selected_mode', 'record');
-
     setTimeout(() => { 
         const url = new URL(window.location.href); url.searchParams.set('tab', 'chat'); window.location.href = url.toString();
     }, 1200);
@@ -666,8 +669,12 @@ async function loadChatHistory() {
     try {
         const res = await axios.get('/web-api/staff-chat/messages');
         const allMessages = res.data;
-        const myName = typeof getCurrentUserName === 'function' ? getCurrentUserName() : '';
         const selectedStaffId = $('#staff-select').val();
+
+        if (selectedStaffId === 'unselected') {
+            appendMessage('ai', '宛先を選択するとメッセージが表示されます。');
+            return;
+        }
 
         const messages = allMessages.filter(msg => {
             if (!selectedStaffId) {
@@ -684,8 +691,10 @@ async function loadChatHistory() {
             return; 
         }
 
+        let unreadIdsToMark = []; 
+
         messages.forEach(msg => {
-            const isMine = msg.sender.name === myName;
+            const isMine = msg.is_mine;
             
             let contentHtml = '';
             if (msg.image_path) {
@@ -696,24 +705,49 @@ async function loadChatHistory() {
             }
 
             if (isMine) {
-                appendMessage('user', contentHtml);
+                let readMarkHtml = '';
+                if (msg.reads && msg.reads.length > 0) {
+                    if (msg.receiver_id === null) {
+                        readMarkHtml = `<span style="font-size: 0.75em; color: #888; font-weight: bold; margin-right: 8px;">既読 ${msg.reads.length}</span>`;
+                    } else {
+                        readMarkHtml = `<span style="font-size: 0.75em; color: #888; font-weight: bold; margin-right: 8px;">既読</span>`;
+                    }
+                }
+                
+                // ★追加: 既読マークの横に「削除」ボタンを追加
+                const deleteBtnHtml = `<a href="javascript:void(0)" onclick="deleteStaffMessage(${msg.id})" style="font-size: 0.75em; color: #dc3545; text-decoration: none; font-weight: bold;">🗑️</a>`;
+                
+                const footerHtml = `<div style="text-align: left; margin-top: 4px; display: flex; align-items: center;">${readMarkHtml}${deleteBtnHtml}</div>`;
+                
+                appendMessage('user', contentHtml + footerHtml);
             } else {
                 const header = `<div style="font-size: 0.8em; font-weight: bold; margin-bottom: 2px;">👤 ${msg.sender.name}</div>`;
                 appendMessage('staff', header + contentHtml);
+                unreadIdsToMark.push(msg.id);
             }
         });
+        
         setTimeout(() => { $('#chat-window').scrollTop($('#chat-window')[0].scrollHeight); }, 100);
 
-        updateAlertCounts();
+        if (unreadIdsToMark.length > 0) {
+            await axios.post('/web-api/staff-chat/mark-as-read', { message_ids: unreadIdsToMark });
+            updateAlertCounts(); 
+        } else {
+            updateAlertCounts();
+        }
 
     } catch (e) {
         $('#chat-window').empty();
     }
 }
 
-// ★メッセージ送信機能はそのまま再利用し、ボタンからも呼び出せるように公開(windowに紐付けないが、スコープ内なので使用可能)
-async function sendStaffMessage(messageText, imageFile = null) {
+window.sendStaffMessage = async function(messageText, imageFile = null) {
     const receiverId = $('#staff-select').val(); 
+    
+    if (receiverId === 'unselected') {
+        alert("送信先を選択してください。");
+        return;
+    }
     
     const formData = new FormData();
     if (receiverId) formData.append('receiver_id', receiverId);
@@ -727,7 +761,7 @@ async function sendStaffMessage(messageText, imageFile = null) {
         
         let contentHtml = '';
         if (imageFile) {
-            contentHtml += `<div style="color: #0056b3; font-size: 0.85em;">📷 ${imageFile.name}</div>`;
+            contentHtml += `<div style="color: #0056b3; font-size: 0.85em;">🖼️ ${imageFile.name}</div>`;
         }
         if (messageText) {
             contentHtml += `<div>${messageText.replace(/\n/g, '<br>')}</div>`;
@@ -736,6 +770,8 @@ async function sendStaffMessage(messageText, imageFile = null) {
         appendMessage('user', contentHtml);
         $('#user-input').val('').css('height', 'auto');
         
+        setTimeout(() => { loadChatHistory(); }, 500);
+
     } catch (e) {
         let errorMsg = '送信に失敗しました。';
         if (e.response && e.response.data && e.response.data.message) {
@@ -745,14 +781,91 @@ async function sendStaffMessage(messageText, imageFile = null) {
         console.error("送信エラー詳細:", e.response || e);
     }
 }
-// 定型文ボタン用に関数をグローバルに公開
-window.sendStaffMessage = sendStaffMessage;
+
+// ★追加: 自分が送信したメッセージを削除する関数
+window.deleteStaffMessage = async function(msgId) {
+    if (!confirm("送信したメッセージを削除しますか？\n（※添付画像も完全に削除されます）")) {
+        return;
+    }
+
+    try {
+        await axios.delete(`/web-api/staff-chat/messages/${msgId}`);
+        // 削除成功後、チャット履歴を再読み込みして画面から消す
+        loadChatHistory();
+    } catch (e) {
+        alert("メッセージの削除に失敗しました。");
+        console.error("削除エラー詳細:", e.response || e);
+    }
+}
 
 
 // =======================================================
 // 10. メインイベント
 // =======================================================
 $(document).ready(function() {
+    
+    const modernUIStyle = `
+        <style>
+            #chat-form {
+                display: flex !important;
+                flex-wrap: wrap !important;
+                align-items: center !important;
+            }
+            #user-input {
+                order: 1 !important; 
+                flex: 1 1 100% !important; 
+                width: 100% !important;
+                min-height: 44px !important; 
+                margin: 0 0 10px 0 !important; 
+                border-radius: 15px !important; 
+                font-size: 16px !important; 
+                padding: 10px 15px !important;
+                box-sizing: border-box !important;
+                resize: vertical !important; 
+            }
+            #chat-form button, .chat-action-btn {
+                order: 2 !important; 
+                margin: 0 8px 0 0 !important;
+                height: 38px !important;
+                border-radius: 19px !important;
+                align-items: center !important;
+                justify-content: center !important;
+            }
+            
+            .chat-btn-show {
+                display: inline-flex !important;
+            }
+            .chat-btn-hide {
+                display: none !important;
+            }
+
+            #chat-clear-btn {
+                margin-left: 0 !important;
+            }
+            #chat-form button[type="submit"] {
+                order: 3 !important; 
+                margin-left: auto !important; 
+                margin-right: 0 !important;
+            }
+            #emoji-picker-btn {
+                position: relative;
+            }
+            #emoji-picker {
+                width: 300px !important;
+                max-width: 90vw !important;
+                left: 0 !important; 
+                transform: none !important;
+                bottom: 120% !important;
+            }
+        </style>
+    `;
+    $('head').append(modernUIStyle);
+
+    setTimeout(() => {
+        $('#chat-attach-btn').text('🖼️').attr('title', '画像・写真を添付').addClass('chat-action-btn');
+        $('#voice-input-btn').addClass('chat-action-btn');
+    }, 100);
+
     updateClientMap(); monitorNetworkRequests();
     
     if (sessionStorage.getItem('ai_is_returning_from_save') === 'true') {
@@ -788,11 +901,78 @@ $(document).ready(function() {
             $clientArea.after(`
                 <div id="staff-select-container" style="display: none; margin-bottom: 10px;">
                     <select id="staff-select" style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ddd; background-color: #e8f4f8; color: #0056b3; font-weight: bold;">
+                        <option value="unselected">👤 宛先を選択してください</option>
                         <option value="">🏢 全員に送信</option>
                     </select>
                 </div>
             `);
             loadStaffList();
+        }
+
+        if ($('#emoji-picker-btn').length === 0) {
+            const emojiBtn = $('<button type="button" id="emoji-picker-btn" class="chat-action-btn chat-btn-hide" style="background:none; border:none; font-size:1.4em; cursor:pointer; padding:0 6px; outline:none;" title="絵文字を選ぶ">😀</button>');
+            $('#chat-attach-btn').after(emojiBtn);
+            
+            $('#emoji-picker-btn').parent().css('position', 'relative');
+            const pickerHtml = `<div id="emoji-picker" class="chat-btn-hide" style="position:absolute; bottom:120%; right:0; width:280px; height:200px; background:#fff; border:1px solid #ddd; border-radius:10px; box-shadow:0 5px 15px rgba(0,0,0,0.15); overflow-y:auto; padding:10px; z-index:1000; flex-wrap:wrap; align-content:flex-start;"></div>`;
+            $('#emoji-picker-btn').parent().append(pickerHtml);
+
+            const emojis = [
+                "😀","😃","😄","😁","😆","😅","😂","🤣","🥲","☺️","😊","😇","🙂","🙃","😉","😌","😍","🥰","😘","😋","😛","😝","😜","🤪","🤨","🧐","🤓","😎","🥸","🤩","🥳","😏","😒","😞","😔","😟","😕","🙁","😣","😖","😫","😩","🥺","😢","😭","😤","😠","😡","🤬","🤯","😳","🥵","🥶","😱","😨","😰","😥","😓","🫣","🤭","🤫","🤥","😶","😐","😑","😬","🙄","😯","😦","😧","😮","😲","🥱","😴","🤤","😪","😵","🤐","🥴","🤢","🤮","🤧","😷","🤒","🤕","🤑","🤠","😈","👿","👹","👺","🤡","💩","👻","💀","👽","🤖","🎃",
+                "👋","🤚","🖐","✋","🖖","👌","🤌","🤏","✌️","🤞","🫰","🤟","🤘","🤙","👈","👉","👆","🖕","👇","☝️","👍","👎","✊","👊","🤛","🤜","👏","🙌","👐","🤲","🤝","🙏","💪",
+                "💘","💝","💖","💗","💓","💞","💕","💟","❣️","💔","❤️","🧡","💛","💚","💙","💜","🤎","🖤","🤍",
+                "🐶","🐱","🐭","🐹","🐰","🦊","🐻","🐼","🐨","🐯","🦁","🐮","🐷","🐸","🐵","🐔","🐧","🐦","🐤","☀️","☁️","🌧","❄️","☃️","🔥","✨","🌟","💫","💥","💢","💦","💧","💤","💬","💭"
+            ];
+            
+            let html = '<div style="display:flex; flex-wrap:wrap; gap:2px;">';
+            emojis.forEach(e => {
+                html += `<span class="emoji-item" style="cursor:pointer; font-size:1.5em; display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; border-radius:6px; user-select:none; transition:background 0.2s;" onmouseover="this.style.backgroundColor='#f0f0f0'" onmouseout="this.style.backgroundColor='transparent'">${e}</span>`;
+            });
+            html += '</div>';
+            $('#emoji-picker').html(html);
+
+            $('#emoji-picker-btn').on('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                if ($('#emoji-picker').hasClass('chat-btn-show')) {
+                    $('#emoji-picker').removeClass('chat-btn-show').addClass('chat-btn-hide');
+                } else {
+                    $('#emoji-picker').removeClass('chat-btn-hide').addClass('chat-btn-show');
+                }
+            });
+
+            $(document).on('click', '.emoji-item', function(e) {
+                e.stopPropagation();
+                const emoji = $(this).text();
+                const val = $input.val();
+                $input.val(val + emoji).trigger('input'); 
+                $input.focus();
+            });
+
+            $(document).on('click', function(e) {
+                if (!$(e.target).closest('#emoji-picker, #emoji-picker-btn').length) {
+                    $('#emoji-picker').removeClass('chat-btn-show').addClass('chat-btn-hide');
+                }
+            });
+        }
+
+        if ($('#chat-file-btn').length === 0) {
+            const fileBtn = $('<button type="button" id="chat-file-btn" class="chat-action-btn chat-btn-hide" style="background:none; border:none; font-size:1.4em; cursor:pointer; padding:0 6px; outline:none;" title="ファイルを添付">＋</button>');
+            const fileInput = $('<input type="file" id="chat-file-input" style="display:none;" accept=".txt,.pdf,.mp4,.zip,.doc,.docx,.xls,.xlsx">');
+            $('#emoji-picker-btn').after(fileBtn);
+            $('#chat-form').append(fileInput);
+
+            $('#chat-file-btn').on('click', function() {
+                $('#chat-file-input').click();
+            });
+
+            $('#chat-file-input').on('change', function() {
+                const file = this.files[0];
+                if (file) {
+                    alert('【お知らせ】\nファイルの選択ボタンは動作イメージ用です。実際に「テキスト・PDF・動画等」を送信・保存・AI解析する場合はバックエンドの改修が必要なため実装は行っていません\n\n選択されたファイル: ' + file.name);
+                    $(this).val(''); 
+                }
+            });
         }
 
         if (mode === 'staff_chat') {
@@ -807,19 +987,24 @@ $(document).ready(function() {
             $('#staff-select-container').slideUp(150);
         }
 
+        $('#voice-input-btn').removeClass('chat-btn-hide').addClass('chat-btn-show');
+
         if (mode === 'staff_chat') {
-            $('#voice-input-btn').hide();
-            $('#chat-attach-btn').show();
+            $('#chat-attach-btn, #emoji-picker-btn').removeClass('chat-btn-hide').addClass('chat-btn-show');
         } else {
-            $('#voice-input-btn').show();
-            $('#chat-attach-btn').hide();
+            $('#chat-attach-btn, #emoji-picker-btn, #emoji-picker').removeClass('chat-btn-show').addClass('chat-btn-hide');
+        }
+
+        if (mode === 'staff_chat' || mode === 'analyze') {
+            $('#chat-file-btn').removeClass('chat-btn-hide').addClass('chat-btn-show');
+        } else {
+            $('#chat-file-btn').removeClass('chat-btn-show').addClass('chat-btn-hide');
         }
 
         const $qa = $('#chat-quick-actions');
         
-        // ★追加: スタッフチャット用の定型文クイックアクションを生成
         if ($qa.find('.for-staff_chat').length === 0) {
-            const quickReplies = ['了解です', 'ありがとう💓', '良かったです✨', '対応します', '👍', '🙇‍♀️', '👌', '🙇‍♂️'];
+            const quickReplies = ['了解です', 'ありがとう', '良かったです', '対応します', 'よろしくお願いします'];
             let btnsHtml = '<div class="for-staff_chat" style="display:none; gap:6px; overflow-x:auto; padding: 4px 0; width:100%; white-space:nowrap;">';
             quickReplies.forEach(text => {
                 btnsHtml += `<button type="button" onclick="window.sendStaffMessage('${text}')" style="background:#fff; border:1px solid #0056b3; color:#0056b3; border-radius:15px; padding:4px 12px; font-size:0.85em; cursor:pointer; font-weight:bold; box-shadow:0 1px 2px rgba(0,0,0,0.05); transition:background 0.2s;">${text}</button>`;
@@ -840,7 +1025,6 @@ $(document).ready(function() {
             $qa.find('.for-record, .for-staff_chat').hide(); $qa.find('.for-schedule').show();
             $qa.css('display', 'flex').hide().fadeIn(250);
         } else if (mode === 'staff_chat') {
-            // ★追加: スタッフチャット時に定型文ボタンを表示
             $qa.find('.for-record, .for-schedule').hide(); $qa.find('.for-staff_chat').css({ 'display': 'flex', 'overflow-x': 'auto', 'width': '100%' });
             $qa.css('display', 'flex').hide().fadeIn(250);
         } else { 
@@ -992,15 +1176,12 @@ $(document).ready(function() {
     });
 });
 
-// =======================================================
-// ★新規追加: アラートパネルから特定の職員とのチャットを開く
-// =======================================================
 window.openSpecificStaffChat = function(staffId) {
     if (typeof togglePanel === 'function') togglePanel('dash-staff-chat-panel');
     if (typeof window.updateChatMode === 'function') window.updateChatMode('staff_chat');
     
     setTimeout(() => {
-        if (staffId) {
+        if (staffId !== undefined && staffId !== null) {
             $('#staff-select').val(staffId).trigger('change');
         } else {
             $('#staff-select').val('').trigger('change');
@@ -1013,17 +1194,10 @@ window.openSpecificStaffChat = function(staffId) {
     }, 200);
 };
 
-// =======================================================
-// ★新規追加: ケア記録タブを開き、選択中の利用者をセットする
-// =======================================================
 window.openRecordTabWithClient = function() {
     if (typeof showTab === 'function') showTab('record');
-    
     const selectedClientId = $('#client-select').val();
-    
     if (selectedClientId) {
-        setTimeout(() => {
-            $('#record-client-select').val(selectedClientId).trigger('change');
-        }, 100);
+        setTimeout(() => { $('#record-client-select').val(selectedClientId).trigger('change'); }, 100);
     }
 };

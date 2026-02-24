@@ -153,7 +153,6 @@ Route::middleware(['auth'])->prefix('web-api')->group(function () {
         return response()->json($unfinished);
     });
 
-    // ★修正: ファイルの存在確認を確実に行い、ない場合は FILE_NOT_FOUND を返す
     Route::get('/manual-guide', function () {
         $path = storage_path('app/manual_index.json');
         if (file_exists($path)) {
@@ -168,8 +167,10 @@ Route::middleware(['auth'])->prefix('web-api')->group(function () {
     Route::get('/staff-chat/users', [App\Http\Controllers\StaffChatController::class, 'getStaffList']);
     Route::get('/staff-chat/messages', [App\Http\Controllers\StaffChatController::class, 'getMessages']);
     Route::post('/staff-chat/send', [App\Http\Controllers\StaffChatController::class, 'sendMessage']);
-    // ★追加: 未読メッセージ数を取得するルート
+    Route::post('/staff-chat/mark-as-read', [App\Http\Controllers\StaffChatController::class, 'markAsRead']);
     Route::get('/staff-chat/unread-count', [App\Http\Controllers\StaffChatController::class, 'getUnreadCount']);
+    // ★追加: メッセージ削除用のルート
+    Route::delete('/staff-chat/messages/{id}', [App\Http\Controllers\StaffChatController::class, 'deleteMessage']);
 });
 
 // プロフィール管理

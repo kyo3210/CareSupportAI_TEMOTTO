@@ -107,7 +107,7 @@
         
         <button type="submit" style="background: #28a745; color: white; border: none; padding: 0 20px; border-radius: 10px; cursor: pointer; font-weight: bold; height: 48px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">送信</button>
         
-        <button type="button" id="chat-clear-btn" style="background: #dc3545; color: white; border: none; padding: 0 12px; border-radius: 10px; cursor: pointer; font-size: 0.8em; height: 48px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">クリア</button>
+        <button type="button" id="chat-clear-btn" style="background: #ef7d88; color: white; border: none; padding: 0 12px; border-radius: 10px; cursor: pointer; font-size: 0.8em; height: 48px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">チャットクリア</button>
     </form>
 </section>
 
