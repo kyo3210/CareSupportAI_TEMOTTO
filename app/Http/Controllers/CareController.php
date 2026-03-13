@@ -33,32 +33,23 @@ class CareController extends Controller
         try {
             $query = CareRecord::with('client')->orderBy('recorded_at', 'desc');
 
-            // 1. 期間検索 (開始日)
             if ($request->filled('start')) {
                 $query->whereDate('recorded_at', '>=', $request->start);
             }
-
-            // 2. 期間検索 (終了日)
             if ($request->filled('end')) {
                 $query->whereDate('recorded_at', '<=', $request->end);
             }
-
-            // 3. キーワード検索 (利用者名 or 内容 or 記録者)
             if ($request->filled('keyword')) {
                 $keyword = $request->keyword;
                 $query->where(function($q) use ($keyword) {
-                    // 利用者名で検索
                     $q->whereHas('client', function($q2) use ($keyword) {
                         $q2->where('client_name', 'LIKE', "%{$keyword}%");
                     })
-                    // 内容で検索
                     ->orWhere('content', 'LIKE', "%{$keyword}%")
-                    // 記録者で検索
                     ->orWhere('recorded_by', 'LIKE', "%{$keyword}%");
                 });
             }
 
-            // 件数制限
             return $query->take(100)->get();
 
         } catch (\Exception $e) {
@@ -67,9 +58,6 @@ class CareController extends Controller
         }
     }
 
-    /**
-     * ★追加: 直近3件の記録を取得 (チャットクイックアクション用)
-     */
     public function getRecentRecords($clientId)
     {
         $records = CareRecord::where('client_id', $clientId)
@@ -77,7 +65,6 @@ class CareController extends Controller
             ->limit(3)
             ->get();
         
-        // 日付フォーマット調整（フロントエンド表示用）
         foreach ($records as $r) {
             $r->formatted_date = Carbon::parse($r->recorded_at)->format('Y/m/d H:i');
         }
@@ -85,9 +72,6 @@ class CareController extends Controller
         return response()->json($records);
     }
 
-    /**
-     * ★追加: 過去1週間のバイタルデータ取得 (チャットグラフ用)
-     */
     public function getVitalData($clientId)
     {
         $records = CareRecord::where('client_id', $clientId)
@@ -95,7 +79,6 @@ class CareController extends Controller
             ->orderBy('recorded_at', 'asc')
             ->get();
 
-        // Chart.js 用にデータを整形
         return response()->json([
             'dates' => $records->map(function($r) {
                 return Carbon::parse($r->recorded_at)->format('m/d');
@@ -111,26 +94,33 @@ class CareController extends Controller
         $request->validate([
             'client_id'   => 'required',
             'recorded_at' => 'required',
-            'content'     => 'required',
+            'content'     => 'nullable',
         ]);
 
         try {
             $record = new CareRecord();
             $record->client_id           = $request->client_id;
-            $record->schedule_id         = $request->schedule_id;
+            
+            // ★修正：空欄(空文字)で送られてきた場合は、DBエラーを避けるために明確に `null` や `空文字` に変換する
+            $record->schedule_id         = empty($request->schedule_id) ? null : $request->schedule_id;
             $record->recorded_at         = $request->recorded_at;
             $record->recorded_by         = Auth::user()->name; 
-            $record->content             = $request->content;
-            $record->body_temp           = $request->body_temp;
-            $record->blood_pressure_high = $request->blood_pressure_high;
-            $record->blood_pressure_low  = $request->blood_pressure_low;
-            $record->water_intake        = $request->water_intake;
-            $record->spo2                = $request->spo2;
+            
+            // contentが未入力の場合は空文字を入れる（DBのNOT NULL制約回避）
+            $record->content             = $request->content ?? ''; 
+            
+            // 数値項目が未入力の場合は null を入れる（数字カラムへの空文字エラー回避）
+            $record->body_temp           = empty($request->body_temp) ? null : $request->body_temp;
+            $record->blood_pressure_high = empty($request->blood_pressure_high) ? null : $request->blood_pressure_high;
+            $record->blood_pressure_low  = empty($request->blood_pressure_low) ? null : $request->blood_pressure_low;
+            $record->water_intake        = empty($request->water_intake) ? null : $request->water_intake;
+            $record->spo2                = empty($request->spo2) ? null : $request->spo2;
 
             $record->save();
 
             return response()->json(['status' => 'success']);
         } catch (\Exception $e) {
+            Log::error('ケア記録保存エラー: ' . $e->getMessage());
             return response()->json(['status' => 'error', 'message' => '保存エラー', 'details' => $e->getMessage()], 500);
         }
     }
@@ -140,21 +130,27 @@ class CareController extends Controller
         try {
             $record = CareRecord::findOrFail($id);
             $record->client_id           = $request->client_id;
+            
             if($request->recorded_at) {
                 $record->recorded_at = $request->recorded_at;
             }
+            
             $record->recorded_by         = Auth::user()->name;
-            $record->content             = $request->content;
-            $record->body_temp           = $request->body_temp;
-            $record->blood_pressure_high = $request->blood_pressure_high;
-            $record->blood_pressure_low  = $request->blood_pressure_low;
-            $record->water_intake        = $request->water_intake;
-            $record->spo2                = $request->spo2;
+            
+            // ★修正：更新時も同様に空欄対策を行う
+            $record->content             = $request->content ?? ''; 
+            $record->body_temp           = empty($request->body_temp) ? null : $request->body_temp;
+            $record->blood_pressure_high = empty($request->blood_pressure_high) ? null : $request->blood_pressure_high;
+            $record->blood_pressure_low  = empty($request->blood_pressure_low) ? null : $request->blood_pressure_low;
+            $record->water_intake        = empty($request->water_intake) ? null : $request->water_intake;
+            $record->spo2                = empty($request->spo2) ? null : $request->spo2;
+            
             $record->save();
 
             return response()->json(['status' => 'success', 'message' => '更新完了']);
         } catch (\Exception $e) {
-            return response()->json(['status' => 'error', 'message' => '更新エラー'], 500);
+            Log::error('ケア記録更新エラー: ' . $e->getMessage());
+            return response()->json(['status' => 'error', 'message' => '更新エラー', 'details' => $e->getMessage()], 500);
         }
     }
 
@@ -212,7 +208,6 @@ class CareController extends Controller
 
             $apiKey = config('services.gemini.key') ?: env('GEMINI_API_KEY');
             
-            // ★維持: gemini-2.5-flash モデルを使用
             $response = Http::withHeaders(['Content-Type' => 'application/json'])
                 ->post("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={$apiKey}", [
                     'contents' => [

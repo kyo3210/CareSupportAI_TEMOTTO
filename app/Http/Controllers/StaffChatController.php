@@ -7,7 +7,7 @@ use App\Models\User;
 use App\Models\StaffMessage;
 use App\Models\StaffMessageRead;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Storage; // ★追加: 画像ファイル削除用
+use Illuminate\Support\Facades\Storage; // ★画像ファイル削除用
 
 class StaffChatController extends Controller
 {
@@ -44,7 +44,8 @@ class StaffChatController extends Controller
         $request->validate([
             'receiver_id' => 'nullable|exists:users,id',
             'message' => 'nullable|string',
-            'image' => 'nullable|image|max:2048', 
+            // ★修正: 2048(2MB) から 10240(10MB) に上限を引き上げました
+            'image' => 'nullable|image|max:10240', 
         ]);
 
         $userId = Auth::id();
@@ -107,7 +108,7 @@ class StaffChatController extends Controller
         return response()->json(['status' => 'success']);
     }
 
-    // ⑥ ★追加: メッセージを削除する処理
+    // ⑥ メッセージを削除する処理
     public function deleteMessage($id)
     {
         $userId = Auth::id();

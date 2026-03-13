@@ -41,22 +41,50 @@ class OfficeController extends Controller
     }
 
     // --- 追加：職員の新規登録（紐付け含む） ---
-public function storeStaff(Request $request)
-{
-    $validated = $request->validate([
-        'name'      => 'required|string|max:255',
-        'email'     => 'required|email|unique:users,email',
-        'password'  => 'required|string|min:8',
-        'office_id' => 'required|exists:offices,id', // 必須にする
-    ]);
+    public function storeStaff(Request $request)
+    {
+        $validated = $request->validate([
+            'name'      => 'required|string|max:255',
+            'email'     => 'required|email|unique:users,email',
+            'password'  => 'required|string|min:8',
+            'office_id' => 'required|exists:offices,id', // 必須にする
+        ]);
 
-    User::create([
-        'name'      => $validated['name'],
-        'email'     => $validated['email'],
-        'password'  => Hash::make($validated['password']),
-        'office_id' => $validated['office_id'], // 送られてきたIDをセット
-    ]);
+        User::create([
+            'name'      => $validated['name'],
+            'email'     => $validated['email'],
+            'password'  => Hash::make($validated['password']),
+            'office_id' => $validated['office_id'], // 送られてきたIDをセット
+        ]);
 
-    return response()->json(['status' => 'success', 'message' => '職員を登録し、事業所に紐付けました']);
-}
+        return response()->json(['status' => 'success', 'message' => '職員を登録し、事業所に紐付けました']);
+    }
+
+    // --- ★追加：職員の更新 ---
+    public function updateStaff(Request $request, $id)
+    {
+        $staff = User::findOrFail($id);
+
+        // セキュリティ: 他の事業所の職員は編集できないようにする
+        if ($staff->office_id !== Auth::user()->office_id) {
+            return response()->json(['error' => '権限がありません'], 403);
+        }
+
+        $validated = $request->validate([
+            'name'  => 'required|string|max:255',
+            // 自分自身のメールアドレスは重複チェックから除外する
+            'email' => 'required|email|unique:users,email,' . $id, 
+            'password' => 'nullable|string|min:8', // 空欄の場合は更新しない
+        ]);
+
+        $staff->name = $validated['name'];
+        $staff->email = $validated['email'];
+        // パスワードが入力されている場合のみ暗号化して更新
+        if (!empty($validated['password'])) {
+            $staff->password = Hash::make($validated['password']);
+        }
+        $staff->save();
+
+        return response()->json(['status' => 'success', 'message' => '職員情報を更新しました']);
+    }
 }

@@ -56,12 +56,43 @@ $(document).ready(function() {
         calendar = new FullCalendar.Calendar(calendarEl, {
             initialView: 'timeGridDay',
             headerToolbar: { left: 'prev,next today', center: 'title', right: 'timeGridDay,dayGridMonth' },
-            locale: 'ja', allDaySlot: false, editable: true, nowIndicator: true,
-            selectable: true, // 日付選択を可能にする
-            events: '/web-api/schedules', 
+            locale: 'ja', allDaySlot: true, editable: true, nowIndicator: true,
+            selectable: true, 
             
-            // ★追加：カレンダーの空き時間をタップした時の処理
+            eventSources: [
+                {
+                    url: '/web-api/schedules',
+                    editable: true
+                },
+                function(info, successCallback, failureCallback) {
+                    fetch('https://holidays-jp.github.io/api/v1/date.json')
+                    .then(response => response.json())
+                    .then(data => {
+                        const events = [];
+                        for (const [date, name] of Object.entries(data)) {
+                            events.push({
+                                title: name,
+                                start: date,
+                                display: 'background', 
+                                color: '#fff5f5',      
+                                classNames: ['holiday-event'],
+                                allDay: true
+                            });
+                        }
+                        successCallback(events);
+                    })
+                    .catch(err => {
+                        console.error("祝日取得エラー", err);
+                        successCallback([]);
+                    });
+                }
+            ],
+
+            // ★修正：重複の原因だった eventDidMount のブロックを削除しました
+
             select: function(info) {
+                if (info.allDay && info.view.type !== 'dayGridMonth') return;
+
                 const startStr = formatDatetimeLocal(info.start);
                 const endStr = formatDatetimeLocal(info.end);
                 $('#sch-start').val(startStr);
@@ -70,7 +101,13 @@ $(document).ready(function() {
             },
 
             eventClick: function(info) {
-                const ev = info.event; const props = ev.extendedProps;
+                const ev = info.event; 
+                
+                if (ev.classNames.includes('holiday-event')) {
+                    return;
+                }
+
+                const props = ev.extendedProps;
                 $('#edit-sch-id').val(ev.id); $('#edit-sch-content').val(props.description);
                 $('#edit-sch-start').val(ev.startStr.substring(0, 16));
                 $('#edit-sch-end').val(ev.endStr ? ev.endStr.substring(0, 16) : '');
@@ -95,7 +132,7 @@ $(document).ready(function() {
         window.calendar = calendar; 
     }
 
-    // ★追加：「予定追加」ボタンを押した時の初期値セット
+    // 「予定追加」ボタンを押した時の初期値セット
     $('#add-schedule-btn').on('click', () => {
         const now = new Date();
         const later = new Date(now.getTime() + (60 * 60 * 1000)); // 1時間後
@@ -104,7 +141,7 @@ $(document).ready(function() {
         $('#schedule-modal').fadeIn(200);
     });
 
-    // ★追加：開始日時が変更されたら終了日時を1時間後に連動させる
+    // 開始日時が変更されたら終了日時を1時間後に連動させる
     $('#sch-start').on('change', function() {
         const startVal = $(this).val();
         if (!startVal) return;

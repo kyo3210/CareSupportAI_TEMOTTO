@@ -44,6 +44,16 @@
  * - ★修正: CSSの!importantの競合を解消し、ボタンの表示/非表示（マイク常時、画像・絵文字はメッセージのみ等）が正しく機能するように修正（今回）
  * - ★追加: 「AI相談」「メッセージ」モード時に、ファイル（txt, pdf, mp4等）を添付するためのボタン（📎）を追加（今回）
  * - ★追加: 送信したメッセージを削除できる機能（🗑️ 削除ボタン）を追加（今回）
+ * - 追加: 「メッセージ」と「スケジュール」の間に「🎙️ 録音」モードを自動追加。
+ * - 追加: ブラウザ上でのマイク録音・音声ファイル選択、およびGemini AIへの文字起こし・議事録作成APIとの連携機能。
+ * - ★修正: 「録音」ボタンが改行されて配置されるデザイン崩れを修正。既存ボタンをクローンして正確な位置に横並びで配置するように改善（今回）
+ * - ★修正: 画面のHTML構造に依存せず、既存の「メッセージ」ボタンのHTMLを完全複製して「録音」ボタンを横並びに確実に追加するよう修正（今回）
+ * - ★修正: 後から追加した「録音」ボタンをクリックしても正しく画面が切り替わるよう、クリックイベントの監視方法を修正（今回）
+ */
+/**
+ * ai-chat.js - AI音声入力＆ケア記録・スケジュール連携システム
+ * 【Gold Master v8.5】
+ * - ★修正: チャット未読アラートにおいて、同じ送信者からの複数のメッセージを1行にグループ化し、「〇件」というバッジを表示するようにUIを改善（今回）
  */
 
 // =======================================================
@@ -102,21 +112,48 @@ async function updateAlertCounts() {
         if (unreadCount === 0) {
             chatHtml = '<li class="empty-msg">現在、未読のメッセージはありません。</li>';
         } else {
+            // ★修正: 送信者（個人宛て/全員宛て）ごとに未読メッセージをグループ化する
+            const groupedMsgs = {};
             unreadMsgs.forEach(msg => {
+                const isBroadcast = msg.receiver_id === null;
+                // 全員宛てか個人宛てか、および送信者IDでキーを作る
+                const groupKey = isBroadcast ? 'broadcast_' + msg.sender_id : 'private_' + msg.sender_id;
+                
+                if (!groupedMsgs[groupKey]) {
+                    groupedMsgs[groupKey] = {
+                        count: 0,
+                        latestMsg: msg,
+                        isBroadcast: isBroadcast,
+                        senderName: msg.sender.name,
+                        targetId: isBroadcast ? '' : msg.sender_id
+                    };
+                }
+                groupedMsgs[groupKey].count++;
+            });
+
+            // グループ化されたデータを元にHTMLを生成
+            Object.values(groupedMsgs).forEach(group => {
+                const msg = group.latestMsg;
                 let textPreview = msg.message ? msg.message : '';
                 if (textPreview.length > 15) textPreview = textPreview.substring(0, 15) + '...';
                 if (msg.image_path) textPreview = '🖼️ ' + (textPreview ? textPreview : '画像');
                 
-                const isBroadcast = msg.receiver_id === null;
-                const targetId = isBroadcast ? '' : msg.sender_id;
-                const senderNameDisplay = isBroadcast ? `📢 ${msg.sender.name} (全員宛て)` : `👤 ${msg.sender.name}`;
+                const isBroadcast = group.isBroadcast;
+                const senderNameDisplay = isBroadcast ? `📢 ${group.senderName} (全員宛て)` : `👤 ${group.senderName}`;
+                
+                // 複数件ある場合は赤いバッジを表示
+                const countBadgeHtml = group.count > 1 
+                    ? `<span style="background: #dc3545; color: #fff; font-size: 0.75em; padding: 2px 6px; border-radius: 10px; margin-left: 6px;">${group.count}件</span>` 
+                    : '';
                 
                 chatHtml += `<li style="padding: 8px 0; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center;">
                     <div style="flex: 1; overflow: hidden;">
-                        <div style="font-weight:bold; color:#0056b3; font-size:0.9em;">${senderNameDisplay}</div>
-                        <div style="font-size:0.85em; color:#555; margin-top:2px; white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">${textPreview}</div>
+                        <div style="font-weight:bold; color:#0056b3; font-size:0.9em; display:flex; align-items:center;">
+                            ${senderNameDisplay}${countBadgeHtml}
+                        </div>
+                        <div style="font-size:0.85em; color:#555; margin-top:4px; white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">${textPreview}</div>
                     </div>
-                    <button type="button" onclick="openSpecificStaffChat('${targetId}')" style="background: #28a745; color: #fff; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 0.85em; margin-left: 10px; font-weight: bold; box-shadow: 0 1px 2px rgba(0,0,0,0.1);">開く</button>
+                    <button type="button" onclick="openSpecificStaffChat('${group.targetId}')" style="background: #28a745; color: #fff; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 0.85em; margin-left: 10px; font-weight: bold; box-shadow: 0 1px 2px rgba(0,0,0,0.1);">開く</button>
                 </li>`;
             });
         }
@@ -493,7 +530,7 @@ async function handleClientNewAction(args) {
 // 7. システムプロンプト設定
 // =======================================================
 function getSystemPrompt(mode) {
-    const nursingPersona = "あなたは介護現場の主任です。丁寧な『です・ます』調で回答してください。";
+    const nursingPersona = "あなたはユーザの質問に対して過去のよくあるお問合せから対応すると思われる操作を案内することができます。丁寧な『です・ます』調で回答してください。";
     let manualInstruction = "";
     if (!cachedManualGuide || cachedManualGuide === "FILE_NOT_FOUND") {
         manualInstruction = "【絶対ルール】マニュアル索引データが読み込めていません。ユーザーには必ず「該当するマニュアルが見つかりませんでした。<br><a href=\"https://emsystems.co.jp/faq/\" target=\"_blank\" style=\"color:#0056b3; font-weight:bold; text-decoration:underline;\">FAQサイト</a>をご確認ください。」と回答してください。絶対に推測で回答しないでください。";
@@ -713,12 +750,8 @@ async function loadChatHistory() {
                         readMarkHtml = `<span style="font-size: 0.75em; color: #888; font-weight: bold; margin-right: 8px;">既読</span>`;
                     }
                 }
-                
-                // ★追加: 既読マークの横に「削除」ボタンを追加
                 const deleteBtnHtml = `<a href="javascript:void(0)" onclick="deleteStaffMessage(${msg.id})" style="font-size: 0.75em; color: #dc3545; text-decoration: none; font-weight: bold;">🗑️</a>`;
-                
                 const footerHtml = `<div style="text-align: left; margin-top: 4px; display: flex; align-items: center;">${readMarkHtml}${deleteBtnHtml}</div>`;
-                
                 appendMessage('user', contentHtml + footerHtml);
             } else {
                 const header = `<div style="font-size: 0.8em; font-weight: bold; margin-bottom: 2px;">👤 ${msg.sender.name}</div>`;
@@ -782,15 +815,12 @@ window.sendStaffMessage = async function(messageText, imageFile = null) {
     }
 }
 
-// ★追加: 自分が送信したメッセージを削除する関数
 window.deleteStaffMessage = async function(msgId) {
     if (!confirm("送信したメッセージを削除しますか？\n（※添付画像も完全に削除されます）")) {
         return;
     }
-
     try {
         await axios.delete(`/web-api/staff-chat/messages/${msgId}`);
-        // 削除成功後、チャット履歴を再読み込みして画面から消す
         loadChatHistory();
     } catch (e) {
         alert("メッセージの削除に失敗しました。");
@@ -798,64 +828,57 @@ window.deleteStaffMessage = async function(msgId) {
     }
 }
 
-
 // =======================================================
 // 10. メインイベント
 // =======================================================
 $(document).ready(function() {
     
+    if ($('input[name="chat-mode"][value="record_audio"]').length === 0) {
+        const $targetInput = $('input[name="chat-mode"][value="staff_chat"]');
+        
+        if ($targetInput.length > 0) {
+            const inputId = $targetInput.attr('id');
+            const $targetLabel = inputId ? $(`label[for="${inputId}"]`) : $();
+            
+            if ($targetLabel.length > 0) {
+                const newId = inputId + '_audio';
+                const inputHtml = $targetInput[0].outerHTML.replace(inputId, newId).replace('staff_chat', 'record_audio').replace(/checked="checked"|checked/g, '');
+                const labelHtml = $targetLabel[0].outerHTML.replace(inputId, newId).replace(/メッセージ/g, '🎙️ 録音');
+                $targetLabel.after(inputHtml + labelHtml);
+            } 
+            else if ($targetInput.closest('label').length > 0) {
+                let htmlStr = $targetInput.closest('label')[0].outerHTML;
+                htmlStr = htmlStr.replace('staff_chat', 'record_audio').replace(/checked="checked"|checked/g, '').replace(/メッセージ/g, '🎙️ 録音');
+                $targetInput.closest('label').after(htmlStr);
+            } 
+            else {
+                let htmlStr = $targetInput.parent()[0].outerHTML;
+                htmlStr = htmlStr.replace('staff_chat', 'record_audio').replace(/checked="checked"|checked/g, '').replace(/メッセージ/g, '🎙️ 録音');
+                $targetInput.parent().after(htmlStr);
+            }
+        }
+    }
+
     const modernUIStyle = `
         <style>
-            #chat-form {
-                display: flex !important;
-                flex-wrap: wrap !important;
-                align-items: center !important;
-            }
+            #chat-form { display: flex !important; flex-wrap: wrap !important; align-items: center !important; }
             #user-input {
-                order: 1 !important; 
-                flex: 1 1 100% !important; 
-                width: 100% !important;
-                min-height: 44px !important; 
-                margin: 0 0 10px 0 !important; 
-                border-radius: 15px !important; 
-                font-size: 16px !important; 
-                padding: 10px 15px !important;
-                box-sizing: border-box !important;
-                resize: vertical !important; 
+                order: 1 !important; flex: 1 1 100% !important; width: 100% !important;
+                min-height: 44px !important; margin: 0 0 10px 0 !important; border-radius: 15px !important; 
+                font-size: 16px !important; padding: 10px 15px !important; box-sizing: border-box !important; resize: vertical !important; 
             }
             #chat-form button, .chat-action-btn {
-                order: 2 !important; 
-                margin: 0 8px 0 0 !important;
-                height: 38px !important;
-                border-radius: 19px !important;
-                align-items: center !important;
-                justify-content: center !important;
+                order: 2 !important; margin: 0 8px 0 0 !important; height: 38px !important; border-radius: 19px !important;
+                align-items: center !important; justify-content: center !important;
             }
-            
-            .chat-btn-show {
-                display: inline-flex !important;
-            }
-            .chat-btn-hide {
-                display: none !important;
-            }
-
-            #chat-clear-btn {
-                margin-left: 0 !important;
-            }
-            #chat-form button[type="submit"] {
-                order: 3 !important; 
-                margin-left: auto !important; 
-                margin-right: 0 !important;
-            }
-            #emoji-picker-btn {
-                position: relative;
-            }
+            .chat-btn-show { display: inline-flex !important; }
+            .chat-btn-hide { display: none !important; }
+            #chat-clear-btn { margin-left: 0 !important; }
+            #chat-form button[type="submit"] { order: 3 !important; margin-left: auto !important; margin-right: 0 !important; }
+            #emoji-picker-btn { position: relative; }
             #emoji-picker {
-                width: 300px !important;
-                max-width: 90vw !important;
-                left: 0 !important; 
-                transform: none !important;
-                bottom: 120% !important;
+                width: 300px !important; max-width: 90vw !important; left: 0 !important; 
+                transform: none !important; bottom: 120% !important;
             }
         </style>
     `;
@@ -872,9 +895,7 @@ $(document).ready(function() {
         sessionStorage.removeItem('ai_is_returning_from_save');
         setTimeout(() => {
             restoreChatState(true);
-            setTimeout(() => {
-                appendMessage('ai', '記録の作成を完了しました。');
-            }, 300);
+            setTimeout(() => { appendMessage('ai', '記録の作成を完了しました。'); }, 300);
         }, 100); 
     }
 
@@ -885,13 +906,148 @@ $(document).ready(function() {
 
     axios.get('/web-api/manual-guide').then(res => { cachedManualGuide = res.data.content; }).catch(err => { cachedManualGuide = "FILE_NOT_FOUND"; });
     
+    let audioFileToUpload = null;
+
+    if ($('#audio-record-panel').length === 0) {
+        const audioPanelHtml = `
+            <div id="audio-record-panel" style="display:none; width: 100%; padding: 15px; background: #f8f9fa; border: 1px solid #ddd; border-radius: 10px; margin-bottom: 10px; text-align: center; order: 0;">
+                <div style="font-weight: bold; color: #333; margin-bottom: 10px; font-size: 1.1em;">🎙️ 会議・面談の録音（話者分離・議事録生成）</div>
+                
+                <div id="record-timer" style="font-size: 2em; font-family: monospace; margin-bottom: 15px; color: #dc3545; font-weight: bold;">00:00</div>
+                <div style="display: flex; justify-content: center; flex-wrap: wrap; gap: 10px; margin-bottom: 15px;">
+                    <button type="button" id="start-record-btn" style="background: #dc3545; color: white; border: none; padding: 10px 20px; border-radius: 25px; font-weight: bold; cursor: pointer; outline: none; box-shadow: 0 2px 5px rgba(0,0,0,0.2); font-size: 1em; display: flex; align-items: center; gap: 5px;">🔴 録音開始</button>
+                    <button type="button" id="stop-record-btn" style="background: #6c757d; color: white; border: none; padding: 10px 20px; border-radius: 25px; font-weight: bold; cursor: pointer; outline: none; box-shadow: 0 2px 5px rgba(0,0,0,0.2); font-size: 1em; display: flex; align-items: center; gap: 5px;" disabled>⏹️ 停止</button>
+                    <button type="button" id="audio-file-select-btn" style="background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 25px; font-weight: bold; cursor: pointer; outline: none; box-shadow: 0 2px 5px rgba(0,0,0,0.2); font-size: 1em; display: flex; align-items: center; gap: 5px;">📁 音声を選ぶ</button>
+                </div>
+                
+                <input type="file" id="audio-file-input" accept="audio/*,video/mp4" style="display:none;">
+
+                <div id="audio-preview-container" style="display:none; margin-top: 15px; background: #fff; padding: 15px; border-radius: 8px; border: 1px solid #0056b3;">
+                    <div style="font-size: 0.9em; color: #0056b3; font-weight: bold; margin-bottom: 8px;" id="audio-ready-msg">✅ 音声の準備ができました</div>
+                    <audio id="audio-preview" controls style="width: 100%; height: 40px; outline: none; margin-bottom: 10px;"></audio>
+                    <button type="button" id="execute-transcribe-btn" style="width: 100%; background: #28a745; color: white; border: none; padding: 12px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 1.1em; box-shadow: 0 2px 5px rgba(0,0,0,0.2);">✨ AIで文字起こし・議事録を作成する</button>
+                </div>
+            </div>
+        `;
+        $('#chat-form').prepend(audioPanelHtml); 
+    }
+
+    let mediaRecorder;
+    let audioChunks = [];
+    let isRecording = false;
+    let recordingTimer;
+    let secondsRecorded = 0;
+
+    $(document).on('click', '#start-record-btn', async function(e) {
+        e.preventDefault();
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+            audioChunks = [];
+            
+            mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
+            
+            mediaRecorder.onstop = () => {
+                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' }); 
+                audioFileToUpload = new File([audioBlob], 'recording.webm', { type: 'audio/webm' });
+                
+                const audioUrl = URL.createObjectURL(audioBlob);
+                $('#audio-preview').attr('src', audioUrl);
+                $('#audio-ready-msg').text('✅ 録音が完了しました');
+                $('#audio-preview-container').slideDown(200);
+                
+                stream.getTracks().forEach(track => track.stop());
+            };
+            
+            mediaRecorder.start();
+            isRecording = true;
+            
+            $('#start-record-btn').prop('disabled', true).css('background', '#f5c6cb');
+            $('#stop-record-btn').prop('disabled', false).css('background', '#343a40');
+            $('#audio-preview-container').slideUp();
+            audioFileToUpload = null;
+            
+            secondsRecorded = 0;
+            $('#record-timer').text('00:00');
+            recordingTimer = setInterval(() => {
+                secondsRecorded++;
+                const m = String(Math.floor(secondsRecorded / 60)).padStart(2, '0');
+                const s = String(secondsRecorded % 60).padStart(2, '0');
+                $('#record-timer').text(`${m}:${s}`);
+            }, 1000);
+            
+        } catch (err) {
+            alert("マイクのアクセスが許可されていないか、エラーが発生しました。");
+            console.error(err);
+        }
+    });
+
+    $(document).on('click', '#stop-record-btn', function(e) {
+        e.preventDefault();
+        if (mediaRecorder && isRecording) {
+            mediaRecorder.stop();
+            isRecording = false;
+            clearInterval(recordingTimer);
+            $('#start-record-btn').prop('disabled', false).css('background', '#dc3545').text('🔴 再録音');
+            $('#stop-record-btn').prop('disabled', true).css('background', '#6c757d');
+        }
+    });
+
+    $(document).on('click', '#audio-file-select-btn', function(e) {
+        e.preventDefault();
+        $('#audio-file-input').click();
+    });
+
+    $('#audio-file-input').on('change', function() {
+        const file = this.files[0];
+        if (file) {
+            audioFileToUpload = file;
+            const audioUrl = URL.createObjectURL(file);
+            $('#audio-preview').attr('src', audioUrl);
+            $('#audio-ready-msg').text(`✅ ファイル選択完了: ${file.name}`);
+            $('#audio-preview-container').slideDown(200);
+            $(this).val(''); 
+        }
+    });
+
+    $(document).on('click', '#execute-transcribe-btn', async function(e) {
+        e.preventDefault();
+        if (!audioFileToUpload) return;
+        
+        appendMessage('user', '🎙️ 音声データを送信しました。文字起こしと議事録の作成をお願いします。');
+        appendMessage('ai', '音声データをアップロードし、解析しています...<br>（ファイルの長さによっては1〜3分ほどかかる場合があります。画面を閉じずにお待ちください）');
+        $('#audio-preview-container').slideUp(200);
+        
+        const formData = new FormData();
+        formData.append('audio_file', audioFileToUpload);
+        
+        try {
+            const res = await axios.post('/web-api/transcribe-audio', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' }
+            });
+            
+            $('.ai-message').last().remove(); 
+            appendMessage('ai', res.data.text);
+            speakText("文字起こしと議事録の作成が完了しました。");
+            audioFileToUpload = null; 
+            
+        } catch (err) {
+            $('.ai-message').last().remove();
+            let errMsg = 'エラーが発生しました。ファイルのサイズが大きすぎるか、通信に失敗した可能性があります。';
+            if (err.response && err.response.data && err.response.data.error) {
+                errMsg = '【エラー】' + err.response.data.error;
+            }
+            appendMessage('ai', errMsg);
+        }
+    });
+
     function updateModeUI(mode) {
         activeQuickAction = null;
         
         const placeholders = {
             analyze: "AIに何でも相談してください", record: "例：田中さんの今日の体温は36.5度でした...",
             schedule: "例：明日の10時に会議の予定を入れて...", manual: "システム操作を案内します",
-            staff_chat: "職員にメッセージを送信" 
+            staff_chat: "職員にメッセージを送信", record_audio: "※このモードでのテキスト入力は不要です"
         };
         $input.attr('placeholder', placeholders[mode] || "");
         
@@ -920,8 +1076,7 @@ $(document).ready(function() {
             const emojis = [
                 "😀","😃","😄","😁","😆","😅","😂","🤣","🥲","☺️","😊","😇","🙂","🙃","😉","😌","😍","🥰","😘","😋","😛","😝","😜","🤪","🤨","🧐","🤓","😎","🥸","🤩","🥳","😏","😒","😞","😔","😟","😕","🙁","😣","😖","😫","😩","🥺","😢","😭","😤","😠","😡","🤬","🤯","😳","🥵","🥶","😱","😨","😰","😥","😓","🫣","🤭","🤫","🤥","😶","😐","😑","😬","🙄","😯","😦","😧","😮","😲","🥱","😴","🤤","😪","😵","🤐","🥴","🤢","🤮","🤧","😷","🤒","🤕","🤑","🤠","😈","👿","👹","👺","🤡","💩","👻","💀","👽","🤖","🎃",
                 "👋","🤚","🖐","✋","🖖","👌","🤌","🤏","✌️","🤞","🫰","🤟","🤘","🤙","👈","👉","👆","🖕","👇","☝️","👍","👎","✊","👊","🤛","🤜","👏","🙌","👐","🤲","🤝","🙏","💪",
-                "💘","💝","💖","💗","💓","💞","💕","💟","❣️","💔","❤️","🧡","💛","💚","💙","💜","🤎","🖤","🤍",
-                "🐶","🐱","🐭","🐹","🐰","🦊","🐻","🐼","🐨","🐯","🦁","🐮","🐷","🐸","🐵","🐔","🐧","🐦","🐤","☀️","☁️","🌧","❄️","☃️","🔥","✨","🌟","💫","💥","💢","💦","💧","💤","💬","💭"
+                "💘","💝","💖","💗","💓","💞","💕","💟","❣️","💔","❤️","🧡","💛","💚","💙","💜","🤎","🖤","🤍"
             ];
             
             let html = '<div style="display:flex; flex-wrap:wrap; gap:2px;">';
@@ -932,8 +1087,7 @@ $(document).ready(function() {
             $('#emoji-picker').html(html);
 
             $('#emoji-picker-btn').on('click', function(e) {
-                e.preventDefault();
-                e.stopPropagation();
+                e.preventDefault(); e.stopPropagation();
                 if ($('#emoji-picker').hasClass('chat-btn-show')) {
                     $('#emoji-picker').removeClass('chat-btn-show').addClass('chat-btn-hide');
                 } else {
@@ -969,25 +1123,38 @@ $(document).ready(function() {
             $('#chat-file-input').on('change', function() {
                 const file = this.files[0];
                 if (file) {
-                    alert('【お知らせ】\nファイルの選択ボタンは動作イメージ用です。実際に「テキスト・PDF・動画等」を送信・保存・AI解析する場合はバックエンドの改修が必要なため実装は行っていません\n\n選択されたファイル: ' + file.name);
+                    alert('【お知らせ】\nファイルの選択ボタンは動作イメージ用です。実際に「テキスト・PDF等」をAI解析する場合は別途改修が必要なため実装は行っていません\n\n選択されたファイル: ' + file.name);
                     $(this).val(''); 
                 }
             });
         }
 
-        if (mode === 'staff_chat') {
+        // モード別の表示切替
+        if (mode === 'record_audio') {
+            $('#audio-record-panel').slideDown(150);
+            $clientArea.slideUp(150);
+            $('#staff-select-container').slideUp(150);
+        } else if (mode === 'staff_chat') {
+            $('#audio-record-panel').slideUp(150);
             $clientArea.slideUp(150);
             $('#staff-select-container').slideDown(150);
             loadChatHistory(); 
-        } else if (mode === 'record') {
+        } else if (mode === 'record' || mode === 'schedule') {
+            $('#audio-record-panel').slideUp(150);
             $('#staff-select-container').slideUp(150);
             $clientArea.slideDown(150);
         } else {
+            $('#audio-record-panel').slideUp(150);
             $clientArea.slideUp(150);
             $('#staff-select-container').slideUp(150);
         }
 
-        $('#voice-input-btn').removeClass('chat-btn-hide').addClass('chat-btn-show');
+        // 音声入力(🎤)ボタンは、録音モードの時は隠す
+        if (mode === 'record_audio') {
+            $('#voice-input-btn').removeClass('chat-btn-show').addClass('chat-btn-hide');
+        } else {
+            $('#voice-input-btn').removeClass('chat-btn-hide').addClass('chat-btn-show');
+        }
 
         if (mode === 'staff_chat') {
             $('#chat-attach-btn, #emoji-picker-btn').removeClass('chat-btn-hide').addClass('chat-btn-show');
@@ -1002,7 +1169,6 @@ $(document).ready(function() {
         }
 
         const $qa = $('#chat-quick-actions');
-        
         if ($qa.find('.for-staff_chat').length === 0) {
             const quickReplies = ['了解です', 'ありがとう', '良かったです', '対応します', 'よろしくお願いします'];
             let btnsHtml = '<div class="for-staff_chat" style="display:none; gap:6px; overflow-x:auto; padding: 4px 0; width:100%; white-space:nowrap;">';
@@ -1011,11 +1177,6 @@ $(document).ready(function() {
             });
             btnsHtml += '</div>';
             $qa.append(btnsHtml);
-            
-            $qa.find('.for-staff_chat button').hover(
-                function() { $(this).css('background', '#e8f4f8'); },
-                function() { $(this).css('background', '#fff'); }
-            );
         }
 
         if (mode === 'record') {
@@ -1046,7 +1207,7 @@ $(document).ready(function() {
     $input.on('input', function() { this.style.height = 'auto'; this.style.height = (this.scrollHeight) + 'px'; });
     $input.on('keydown', function(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#chat-form').submit(); } });
     
-    $('input[name="chat-mode"]').on('change', function() { 
+    $(document).on('change', 'input[name="chat-mode"]', function() { 
         if (!isRestoring) {
             $('#chat-window').empty();
             sessionStorage.removeItem('ai_chat_history_html');
@@ -1097,6 +1258,13 @@ $(document).ready(function() {
         
         if (selectedMode === 'staff_chat') {
             await sendStaffMessage(inputVal);
+            return;
+        }
+
+        if (selectedMode === 'record_audio') {
+            appendMessage('user', inputVal);
+            $('#user-input').val('').css('height', 'auto');
+            appendMessage('ai', '文字起こしを実行する場合は、上の録音パネルから「✨ AIで文字起こし・議事録を作成する」ボタンを押してください。');
             return;
         }
 

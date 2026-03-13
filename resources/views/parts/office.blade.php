@@ -14,14 +14,16 @@
     </form>
 
     <div style="margin-top: 25px; border-top: 2px dashed #eee; padding-top: 20px;">
-        <h3 style="font-size: 1em; color: #555; margin-bottom: 15px;">👥 職員アカウント作成</h3>
+        <h3 id="staff-form-title" style="font-size: 1em; color: #555; margin-bottom: 15px;">👥 職員アカウント作成</h3>
         <form id="staff-register-form">
             <input type="hidden" id="target-office-id">
+            <input type="hidden" id="staff-id"> 
+            
             <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px;">
                 <div><label>職員氏名</label><input type="text" id="staff-name" placeholder="例: 山田 太郎" required></div>
                 <div><label>メールアドレス</label><input type="email" id="staff-email" placeholder="staff@example.com" required></div>
                 <div>
-                    <label>初期パスワード</label>
+                    <label>パスワード <small id="password-hint" style="color:#888; font-weight:normal;"></small></label>
                     <div style="position: relative;">
                         <input type="password" id="staff-password" placeholder="8文字以上" required style="width: 100%; padding-right: 65px;">
                         <span class="password-toggle-icon" data-target="#staff-password" id="toggle-staff-password" 
@@ -34,8 +36,9 @@
                     </div>
                 </div>
             </div>
-            <div style="margin-top: 10px; text-align: right;">
-                <button type="submit" style="background: #17a2b8; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer;">職員を登録する</button>
+            <div style="margin-top: 10px; text-align: right; display: flex; justify-content: flex-end; gap: 10px;">
+                <button type="button" id="staff-cancel-btn" style="display:none; background: #6c757d; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer;">キャンセル</button>
+                <button type="submit" id="staff-submit-btn" style="background: #17a2b8; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer;">職員を登録する</button>
             </div>
         </form>
     </div>

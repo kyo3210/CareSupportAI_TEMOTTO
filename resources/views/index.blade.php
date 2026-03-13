@@ -47,6 +47,28 @@
         ::placeholder { color: #ccc !important; opacity: 1; }
         :-ms-input-placeholder { color: #ccc !important; }
         ::-ms-input-placeholder { color: #ccc !important; }
+
+        /* ▼▼ 追加・修正：カレンダーの土日・祝日の色設定 ▼▼ */
+        /* 土曜日（青系） */
+        td.fc-day-sat { background-color: #f0f8ff !important; }
+        th.fc-day-sat .fc-col-header-cell-cushion, 
+        td.fc-day-sat .fc-daygrid-day-number { color: #0056b3 !important; }
+        
+        /* 日曜日（赤系） */
+        td.fc-day-sun { background-color: #fff5f5 !important; }
+        th.fc-day-sun .fc-col-header-cell-cushion, 
+        td.fc-day-sun .fc-daygrid-day-number { color: #dc3545 !important; }
+
+        /* 祝日のテキストスタイル（重複を無くし、CSSで赤色に統一） */
+        .holiday-event {
+            color: #dc3545 !important;
+            font-size: 0.85em !important;
+            font-weight: bold !important;
+        }
+        .holiday-event .fc-event-title {
+            color: #dc3545 !important;
+        }
+        /* ▲▲ ここまで追加・修正 ▲▲ */
     </style>
 </head>
 <body style="background: #f4f7f6; font-family: 'Helvetica Neue', Arial, sans-serif; margin: 0; padding: 0;">
@@ -80,7 +102,8 @@
 
     <main>
         <div id="tab-dashboard" class="content-section active">
-            <div style="max-width: 600px; margin: 0 auto;">
+            <div style="max-width: 900px; margin: 0 auto;">
+                
                 <div class="status-bar-container">
                     <button type="button" id="btn-vital-alert" class="status-badge danger-badge" onclick="togglePanel('dash-vital-panel')">
                         <span class="badge-icon">⚠️</span> <span>バイタル</span>
@@ -211,5 +234,127 @@
     <script src="{{ asset('js/schedule-record.js') }}"></script>
     <script src="{{ asset('js/management.js') }}"></script>
     <script src="{{ asset('js/client-register.js') }}"></script>
+
+    <script>
+    $(document).ready(function() {
+        async function fetchOfficeInfo() {
+            try {
+                const response = await axios.get('/web-api/offices');
+                if (response.data.length > 0) {
+                    const office = response.data[0];
+                    $('#prov-id').val(office.id); 
+                    $('#prov-name').val(office.name); 
+                    $('#prov-postcode').val(office.postcode); 
+                    $('#prov-tel').val(office.tel); 
+                    $('#prov-address').val(office.address);
+                    $('#target-office-id').val(office.id);
+                }
+            } catch (e) { console.error("事業所情報取得エラー:", e); }
+        }
+
+        async function fetchStaffList() {
+            try {
+                const res = await axios.get('/web-api/staff');
+                const $list = $('#staff-list'); 
+                if (res.data.length === 0) {
+                    $list.html('<p style="padding: 10px; color: #999; font-size: 0.9em;">登録された職員はいません</p>');
+                    return;
+                }
+                const html = res.data.map(s => `
+                    <div style="padding: 8px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <div style="font-weight: bold; color: #444;">${s.name}</div>
+                            <div style="font-size: 0.85em; color: #777;">${s.email}</div>
+                        </div>
+                        <button type="button" class="edit-staff-btn" data-staff='${JSON.stringify(s)}' style="background:#6c757d; color:white; border:none; padding:5px 12px; border-radius:4px; font-size:0.85em; cursor:pointer;">編集</button>
+                    </div>`).join('');
+                $list.html(html);
+            } catch (e) { console.error("職員一覧取得エラー:", e); }
+        }
+
+        fetchOfficeInfo();
+        fetchStaffList();
+
+        function resetStaffForm() {
+            $('#staff-register-form')[0].reset();
+            $('#staff-id').val('');
+            $('#staff-password').attr('required', true);
+            $('#password-hint').text('');
+            $('#staff-form-title').text('👥 職員アカウント作成');
+            $('#staff-submit-btn').text('職員を登録する').css('background', '#17a2b8');
+            $('#staff-cancel-btn').hide();
+        }
+
+        $(document).on('click', '.edit-staff-btn', function() {
+            const staff = $(this).data('staff');
+            $('#staff-id').val(staff.id);
+            $('#staff-name').val(staff.name);
+            $('#staff-email').val(staff.email);
+            $('#staff-password').val('').removeAttr('required'); 
+            $('#password-hint').text('（変更しない場合は空欄）');
+            
+            $('#staff-form-title').text('✏️ 職員アカウントの編集');
+            $('#staff-submit-btn').text('更新する').css('background', '#28a745');
+            $('#staff-cancel-btn').show();
+            
+            $('html, body').animate({ scrollTop: $('#staff-form-title').offset().top - 80 }, 300);
+        });
+
+        $(document).on('click', '#staff-cancel-btn', function() {
+            resetStaffForm();
+        });
+
+        $(document).on('submit', '#staff-register-form', async function(e) {
+            e.preventDefault(); 
+            const officeId = $('#target-office-id').val();
+            const staffId = $('#staff-id').val();
+
+            if (!officeId) { alert("事業所情報が読み込めていません。"); return; }
+
+            const data = { 
+                name: $('#staff-name').val(), 
+                email: $('#staff-email').val(), 
+                password: $('#staff-password').val(), 
+                office_id: officeId 
+            };
+            
+            try {
+                if (staffId) {
+                    const res = await axios.put('/web-api/staff/' + staffId, data);
+                    if (res.data.status === 'success') { 
+                        alert("✅ 職員情報を更新しました！"); 
+                        resetStaffForm();
+                        fetchStaffList(); 
+                    }
+                } else {
+                    const res = await axios.post('/web-api/staff', data);
+                    if (res.data.status === 'success') { 
+                        alert("✅ 職員の登録が完了しました！"); 
+                        resetStaffForm();
+                        fetchStaffList(); 
+                    }
+                }
+            } catch (e) { 
+                let errorMsg = "処理に失敗しました。";
+                if (e.response && e.response.data && e.response.data.message) {
+                    errorMsg += "\n" + e.response.data.message;
+                }
+                alert(errorMsg); 
+                console.error(e);
+            }
+        });
+
+        $(document).on('click', '#toggle-staff-password', function() {
+            const input = $('#staff-password');
+            if (input.attr('type') === 'password') {
+                input.attr('type', 'text');
+                $(this).text('隠す');
+            } else {
+                input.attr('type', 'password');
+                $(this).text('表示');
+            }
+        });
+    });
+    </script>
 </body>
 </html>

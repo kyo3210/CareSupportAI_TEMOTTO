@@ -57,7 +57,7 @@ Route::middleware(['auth'])->prefix('web-api')->group(function () {
             ->get();
     });
 
-    // AI連携 (Gemini 2.5-Flashを使用)
+    // AI連携
     Route::post('/ask-ai', [CareController::class, 'askAI']);
 
     // --- スケジュール(カレンダー)関連 (基本操作) ---
@@ -121,6 +121,7 @@ Route::middleware(['auth'])->prefix('web-api')->group(function () {
     Route::post('/offices/update', [OfficeController::class, 'update']);
     Route::get('/staff', [OfficeController::class, 'indexStaff']);
     Route::post('/staff', [OfficeController::class, 'storeStaff']);
+    Route::put('/staff/{id}', [OfficeController::class, 'updateStaff']); // ★追加：職員更新ルート
     Route::get('/zipcode/{zip}', function($zip) {
         return Http::get("https://zipcloud.ibsnet.co.jp/api/search?zipcode={$zip}")->json();
     });
@@ -169,8 +170,84 @@ Route::middleware(['auth'])->prefix('web-api')->group(function () {
     Route::post('/staff-chat/send', [App\Http\Controllers\StaffChatController::class, 'sendMessage']);
     Route::post('/staff-chat/mark-as-read', [App\Http\Controllers\StaffChatController::class, 'markAsRead']);
     Route::get('/staff-chat/unread-count', [App\Http\Controllers\StaffChatController::class, 'getUnreadCount']);
-    // ★追加: メッセージ削除用のルート
     Route::delete('/staff-chat/messages/{id}', [App\Http\Controllers\StaffChatController::class, 'deleteMessage']);
+
+    // =========================================================================
+    // ★修正: 録音または音声ファイルをGeminiに送って「文字起こしと議事録生成」を行う処理
+    // =========================================================================
+    Route::post('/transcribe-audio', function (Request $request) {
+        
+        // ① PHPの実行時間とメモリ制限を大幅に緩和
+        set_time_limit(300); 
+        ini_set('memory_limit', '512M');
+
+        // ② ファイルが正しく受信できたかチェック
+        if (!$request->hasFile('audio_file') || !$request->file('audio_file')->isValid()) {
+            $phpMax = ini_get('upload_max_filesize');
+            $errorMsg = $request->hasFile('audio_file') ? $request->file('audio_file')->getErrorMessage() : "ファイルを受信できませんでした。（※Docker/PHPのアップロード上限 {$phpMax} を超えている可能性があります）";
+            return response()->json(['error' => 'ファイルエラー: ' . $errorMsg], 500);
+        }
+
+        $request->validate([
+            'audio_file' => 'required|file|max:102400' 
+        ]);
+
+        $file = $request->file('audio_file');
+        $filePath = $file->getRealPath();
+        $mimeType = $file->getClientMimeType();
+        $apiKey = env('GEMINI_API_KEY');
+
+        if (!$apiKey) {
+            return response()->json(['error' => 'APIキーが設定されていません。'], 500);
+        }
+
+        try {
+            // ③ Gemini File API へ音声データをアップロード
+            $uploadResponse = Http::timeout(120)->withHeaders([
+                'Content-Type' => $mimeType,
+            ])->withBody(file_get_contents($filePath), $mimeType)
+              ->post("https://generativelanguage.googleapis.com/upload/v1beta/files?uploadType=media&key={$apiKey}");
+
+            if (!$uploadResponse->successful()) {
+                return response()->json(['error' => 'アップロード失敗: ' . $uploadResponse->body()], 500);
+            }
+
+            $fileUri = $uploadResponse->json('file.uri');
+
+            // ④ アップロードした音声を使って、Gemini に話者分離と文字起こしを依頼する
+            $prompt = "この音声ファイルの内容を解析し、話者ごとに分離して（Aさん、Bさん等）、会話の流れがわかるように文字起こしをしてください。その後、会議の要点と決定事項をまとめて分かりやすい議事録を作成してください。";
+
+            $generateResponse = Http::timeout(300)->withHeaders([
+                'Content-Type' => 'application/json',
+            ])->post("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={$apiKey}", [
+                'contents' => [
+                    [
+                        'parts' => [
+                            ['text' => $prompt],
+                            ['fileData' => ['fileUri' => $fileUri, 'mimeType' => $mimeType]]
+                        ]
+                    ]
+                ]
+            ]);
+
+            if (!$generateResponse->successful()) {
+                return response()->json(['error' => 'AI生成失敗: ' . $generateResponse->body()], 500);
+            }
+
+            $text = $generateResponse->json('candidates.0.content.parts.0.text');
+            
+            if (!$text) {
+                return response()->json(['error' => 'AIからの応答が空でした。'], 500);
+            }
+
+            return response()->json(['text' => $text]);
+
+        } catch (\Exception $e) {
+            return response()->json(['error' => 'システムエラー: ' . $e->getMessage()], 500);
+        }
+    });
+    // =========================================================================
+
 });
 
 // プロフィール管理
